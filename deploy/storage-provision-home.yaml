@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rgb-storage-setup
+  namespace: default
+spec:
+  nodeName: standpunkt
+  restartPolicy: Never
+  hostPID: true
+  containers:
+    - name: setup
+      image: alpine:3.22
+      securityContext:
+        privileged: true
+      command: [sh, -ec]
+      args:
+        - |
+          nsenter -t 1 -m -u -i -n -p -- sh -ec '
+            test ! -e /etc/exports.d/rgb-classifier.exports
+            mkdir -p /home/rgb-classifier/redis /home/rgb-classifier/images
+            chown -R 1000:1000 /home/rgb-classifier
+            chmod 755 /home/rgb-classifier /home/rgb-classifier/redis /home/rgb-classifier/images
+            printf "%s\n" "/home/rgb-classifier 192.168.1.205(rw,sync,no_subtree_check,root_squash) 192.168.1.207(rw,sync,no_subtree_check,root_squash) 192.168.1.198(rw,sync,no_subtree_check,root_squash) 192.168.1.23(rw,sync,no_subtree_check,root_squash) 192.168.1.186(rw,sync,no_subtree_check,root_squash) 192.168.1.94(rw,sync,no_subtree_check,root_squash) 192.168.1.102(rw,sync,no_subtree_check,root_squash) 192.168.1.35(rw,sync,no_subtree_check,root_squash)" > /etc/exports.d/rgb-classifier.exports
+            exportfs -ra
+            exportfs -v | sed -n "/rgb-classifier/,+1p"
+          '

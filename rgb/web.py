@@ -11,6 +11,7 @@ import requests
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from redis.exceptions import RedisError
 from rgb.events import InvalidEvent, validate_event
+from rgb.store import StaleEvaluation
 
 
 def create_app(store, sources=None, ingest_token=None):
@@ -103,11 +104,9 @@ def create_app(store, sources=None, ingest_token=None):
             return jsonify(error='Unauthorized'), 401
         try:
             data=request.get_json(silent=True)
-            configured=dict(sources)
-            if isinstance(data,dict) and isinstance(data.get('source_id'),str) and data['source_id'] in sources:
-                key=data['source_id']; location=store.location(key)
-                if location:configured[key]={**sources[key],'location':location['label'] or None,'location_record':location}
-            event, image = validate_event(data, configured)
+            event, image = validate_event(data, sources)
+            loc=store.location_at(event['source_id'],event['observed_at'])
+            if loc:event.update(location=loc['label'] or None,location_kind=loc['method'],location_record=loc)
         except InvalidEvent:
             return jsonify(error='Invalid observation'), 400
         row_id, created = store.save(event, image)
@@ -124,13 +123,20 @@ def create_app(store, sources=None, ingest_token=None):
         if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc != request.host:
             return jsonify(error='Origin mismatch'), 403
         data=request.get_json(silent=True)
-        if not isinstance(data,dict) or set(data) not in [{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'}]:
-            return jsonify(error='Expected confidence thresholds or display mode'),400
+        if not isinstance(data,dict) or set(data) not in [{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'},{'vlm_paused'}]:
+            return jsonify(error='Expected confidence thresholds, display mode or vlm_paused'),400
         if 'display_mode' in data and data['display_mode'] not in ['objects','materials']:
             return jsonify(error='Expected objects or materials mode'),400
-        if not all(type(v) in (int,float) and .05<=v<=.99 for k,v in data.items() if k!='display_mode'):
+        if 'vlm_paused' in data and type(data['vlm_paused']) is not bool:
+            return jsonify(error='vlm_paused must be boolean'),400
+        if not all(type(v) in (int,float) and .05<=v<=.99 for k,v in data.items() if k in {'detector_threshold','vlm_threshold'}):
             return jsonify(error='Thresholds must be between 0.05 and 0.99'),400
         return jsonify(store.update_settings(data,actor=request.headers.get('X-Laminarauth-Identity')))
+
+    @app.get('/api/vlm/status')
+    def vlm_status():
+        active=store.redis.get('rgb:vlm:active')
+        return jsonify(paused=store.settings()['vlm_paused'],active=json.loads(active) if active else None,enabled=store.analysis_enabled)
 
     @app.get('/api/board-policy/<source_id>')
     def board_policy(source_id):
@@ -183,13 +189,15 @@ def create_app(store, sources=None, ingest_token=None):
     def evaluate_detection(key):
         if not request.is_json or request.headers.get('X-RGB-Request')!='evaluation':return jsonify(error='Expected evaluation request'),400
         data=request.get_json(silent=True)
-        if not isinstance(data,dict) or set(data) not in [{'reference_label','detector_result','vlm_result','notes'},{'reference_label','detector_result','vlm_result','notes','mode'}]:return jsonify(error='Invalid evaluation'),400
-        if 'mode' in data and data['mode'] not in ['objects','materials']:return jsonify(error='Invalid evaluation mode'),400
+        if not isinstance(data,dict) or set(data)!={'reference_label','detector_result','vlm_result','notes','review_context'}:return jsonify(error='Expected evaluation and displayed review_context'),400
+        context=data.pop('review_context')
+        if not isinstance(context,dict) or set(context)!={'candidate_revision','settings_version','mode'} or type(context['settings_version']) is not int or context['mode'] not in ['objects','materials']:return jsonify(error='Invalid review context'),400
         if not isinstance(data['reference_label'],str) or not 1<=len(data['reference_label'])<=120 or not isinstance(data['notes'],str) or len(data['notes'])>4000:return jsonify(error='Invalid evaluation'),400
-        if data['detector_result'] not in {'correct','incorrect','unscored'} or data['vlm_result'] not in {'correct','incorrect','unscored'}:return jsonify(error='Invalid outcome'),400
+        if data['detector_result'] not in ['correct','incorrect','unscored'] or data['vlm_result'] not in ['correct','incorrect','unscored']:return jsonify(error='Invalid outcome'),400
         try:key=str(UUID(key))
         except ValueError:return 'Not found',404
-        review=store.evaluate(key,data,actor=request.headers.get('X-Laminarauth-Identity'))
+        try:review=store.evaluate(key,data,context,actor=request.headers.get('X-Laminarauth-Identity'))
+        except StaleEvaluation as exc:return jsonify(error=str(exc)),409
         return (jsonify(review),201) if review else ('Not found',404)
 
     @app.get('/api/events')

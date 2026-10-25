@@ -17,7 +17,7 @@ def test_review_tables_roundtrip_and_link_initial_enhancement_failure_evaluation
     candidate={**reading(),'model':'qwen','attempt_id':'attempt1'}
     store.enhance(event,0,candidate,'job')
     store.record_attempt(event,[0],{'attempt_id':'attempt2','started_at':event['observed_at'],'finished_at':event['observed_at'],'model':'qwen','outcome':'failed','latency_ms':42,'raw_response':'bad json','error_type':'ValueError'})
-    store.evaluate(d['detection_id'],{'reference_label':'can','detector_result':'incorrect','vlm_result':'correct','notes':'Pull tab visible'})
+    store.evaluate(d['detection_id'],{'reference_label':'can','detector_result':'incorrect','vlm_result':'correct','notes':'Pull tab visible'},store.get(event['event_id'])['detections'][0]['review_context'])
     directory,path=build_export(store,format)
     try:
         with zipfile.ZipFile(path) as bundle:

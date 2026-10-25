@@ -10,7 +10,9 @@ Object and Material display modes select the latest accepted value for the live
 view and archive. Confidence
 thresholds, request traces, evaluation records and typed review exports are
 available in the dashboard. The Records page provides filters, request URLs,
-and page downloads; per-camera location recording is opt in. See [review data](docs/review-data.md).
+and page downloads; per-camera location recording is opt in. **Pause VLM**
+holds queued model work while the camera and archive keep recording.
+See [review data](docs/review-data.md).
 
 ## Components
 
@@ -32,6 +34,7 @@ retains its existing spelling, `RGBGeneralClassifer`.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+node --test tests/js/*.test.cjs
 ```
 
 For local service development use a private Redis instance with AOF persistence,
@@ -45,7 +48,7 @@ The existing MIT copyright is preserved unchanged.
 ## Continuous integration
 
 The CI workflow runs on pull requests, pushes to `main`, and manual dispatch.
-It runs the test suite, compiles Python sources, checks both browser scripts,
+It runs Python and browser behavior tests, compiles Python sources, checks both browser scripts,
 verifies the pinned model checksum and builds the service image. JUnit test
 results are retained as a workflow artifact for14 days. PR updates cancel an
 older running check for that PR. Deployment remains manual; the workflow does

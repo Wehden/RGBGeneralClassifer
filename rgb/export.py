@@ -20,7 +20,7 @@ SCHEMAS={
  'legacy_opinions':pa.schema([('observation_id',pa.string()),('source_id',pa.string()),('model',pa.string()),('endpoint',pa.string()),('observed_at',T),('status',pa.string()),('text',pa.string()),('reason',pa.string()),('error',pa.string()),('value_json',pa.string())]),
  'detection_updates':pa.schema([('stream_id',pa.string()),('detection_id',pa.string()),('kind',pa.string()),('value_json',pa.string())]),
  'model_attempts':pa.schema([('stream_id',pa.string()),('attempt_id',pa.string()),('job_id',pa.string()),('observation_id',pa.string()),('detection_ids',pa.list_(pa.string())),('source_id',pa.string()),('model',pa.string()),('endpoint',pa.string()),('started_at',T),('finished_at',T),('latency_ms',pa.float64()),('outcome',pa.string()),('http_status',pa.int32()),('prompt_tokens',pa.int64()),('output_tokens',pa.int64()),('finish_reason',pa.string()),('error_type',pa.string()),('error',pa.string()),('prompt_sha256',pa.string()),('prompt',pa.string()),('raw_response',pa.string()),('value_json',pa.string())]),
- 'settings':pa.schema([('stream_id',pa.string()),('version',pa.int64()),('changed_at',T),('actor',pa.string()),('detector_threshold',pa.float64()),('vlm_threshold',pa.float64()),('display_mode',pa.string())]),
+ 'settings':pa.schema([('stream_id',pa.string()),('version',pa.int64()),('changed_at',T),('actor',pa.string()),('detector_threshold',pa.float64()),('vlm_threshold',pa.float64()),('display_mode',pa.string()),('vlm_paused',pa.bool_())]),
  'evaluations':pa.schema([('stream_id',pa.string()),('evaluation_id',pa.string()),('detection_id',pa.string()),('observation_id',pa.string()),('reviewed_at',T),('actor',pa.string()),('mode',pa.string()),('reference_label',pa.string()),('detector_result',pa.string()),('vlm_result',pa.string()),('notes',pa.string()),('value_json',pa.string())])}
 
 
@@ -59,7 +59,7 @@ def rows(store,table,stops,settings,projections):
             elif table=='model_attempts':
                 yield {**{k:v.get(k) for k in ['attempt_id','job_id','detection_ids','source_id','model','endpoint','latency_ms','outcome','http_status','prompt_tokens','output_tokens','finish_reason','error_type','error','prompt_sha256','prompt','raw_response']},'stream_id':row,'observation_id':v.get('scene_id'),'started_at':timestamp(v.get('started_at')),'finished_at':timestamp(v.get('finished_at')),'value_json':fields['value']}
             elif table=='location_updates':yield {'stream_id':row,**{k:v.get(k) for k in ['source_id','version','actor','method','label','latitude','longitude','accuracy_m']},'changed_at':timestamp(v.get('changed_at'))}
-            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode']},'changed_at':timestamp(v.get('changed_at'))}
+            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode','vlm_paused']},'changed_at':timestamp(v.get('changed_at'))}
             else:yield {'stream_id':row,**{k:v.get(k) for k in ['evaluation_id','detection_id','actor','mode','reference_label','detector_result','vlm_result','notes']},'observation_id':v['scene_id'],'reviewed_at':timestamp(v['reviewed_at']),'value_json':fields['value']}
 
 
@@ -82,9 +82,11 @@ def build_export(store,format):
         if kind=='initial':projections.execute('INSERT OR IGNORE INTO projection VALUES (?,NULL,?)',(key,'queued'))
         elif kind=='enhanced':projections.execute('INSERT INTO projection VALUES (?,?,?) ON CONFLICT(detection_id) DO UPDATE SET candidate=excluded.candidate,status=excluded.status',(key,json.dumps(value['candidate']),'complete'))
         elif kind=='processing_failure':projections.execute('UPDATE projection SET status=? WHERE detection_id=?',('failed',key))
-        elif kind=='model_attempt':projections.execute('UPDATE projection SET status=? WHERE detection_id=?',('read_complete' if value['outcome']=='success' else 'failed',key))
+        elif kind=='model_attempt':
+            status={'started':'running','success':'read_complete','failed':'failed'}.get(value['outcome'],'unknown')
+            projections.execute('UPDATE projection SET status=? WHERE detection_id=?',(status,key))
     projections.commit()
-    manifest={'schema_version':4,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
+    manifest={'schema_version':5,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
     try:
         for name,schema in SCHEMAS.items():
             path=root/(name+'.'+format)

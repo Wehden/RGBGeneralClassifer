@@ -18,6 +18,7 @@ from waitress import serve
 from board.detector import Detector, overlay
 from board.refinements import match
 from board.tracking import Tracker
+from board.streaming import response as stream_response
 from common.display import value
 from common.geometry import bounds, fingerprint
 
@@ -173,22 +174,7 @@ def snapshot():
 
 @app.get('/stream')
 def stream():
-    if not viewers.acquire(blocking=False):
-        return 'Viewer limit reached', 429
-    def frames():
-        sequence = -1
-        try:
-            while True:
-                with condition:
-                    condition.wait_for(lambda: state['sequence'] != sequence, timeout=10)
-                    sequence, jpeg = state['sequence'], state['jpeg']
-                    fresh = time.time()-state['last_frame'] < 15
-                if not fresh or jpeg is None:
-                    return
-                yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'+jpeg+b'\r\n'
-        finally:
-            viewers.release()
-    return Response(frames(), mimetype='multipart/x-mixed-replace; boundary=frame', headers={'Cache-Control':'no-store'})
+    return stream_response(condition,state,viewers)
 
 
 if __name__ == '__main__':

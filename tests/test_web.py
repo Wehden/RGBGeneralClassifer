@@ -143,7 +143,7 @@ def test_evaluation_records_hypotheses_with_ground_truth(client,event):
     c,store=client
     c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40})
     d=c.get('/api/events/'+event['event_id']).json['detections'][0]
-    review={'reference_label':'can','detector_result':'incorrect','vlm_result':'unscored','notes':'Pull tab visible'}
+    review={'reference_label':'can','detector_result':'incorrect','vlm_result':'unscored','notes':'Pull tab visible','review_context':d['review_context']}
     r=c.post('/api/detections/'+d['detection_id']+'/evaluate',json=review,headers={'X-RGB-Request':'evaluation'})
     assert r.status_code==201
     assert r.json['initial']['label']=='bottle'

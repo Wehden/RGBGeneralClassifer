@@ -35,6 +35,8 @@ jobs:
         run: |
           node --check rgb/static/app.js
           node --check rgb/static/records.js
+      - name: Test browser behavior
+        run: node --test tests/js/*.test.cjs
       - name: Verify pinned model
         run: echo '2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b  models/efficientdet-lite0.tflite' | sha256sum -c -
       - name: Build service

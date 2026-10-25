@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID, uuid4, uuid5
 from common.display import value
 
-DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','version':0}
+DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','vlm_paused':False,'version':0}
 
 APPEND = """
 local existing = redis.call('HGET', KEYS[1], ARGV[1])
@@ -28,20 +28,31 @@ REQUEST = """
 local state = redis.call('HGET', KEYS[1], ARGV[1])
 if state then
  local s = cjson.decode(state)
- if s.status == 'queued' or s.status == 'running' then return 0 end
+ if s.status == 'queued' or s.status == 'running' or s.status == 'paused' then return 0 end
 end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 redis.call('XADD', KEYS[2], '*', 'event_id', ARGV[1], 'job_id', ARGV[3])
 return 1
 """
 ENHANCE = """
-if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 then return 0 end
+local saved = redis.call('HGET', KEYS[5], ARGV[1])
+if saved then return saved end
+if redis.call('SISMEMBER', KEYS[3], ARGV[1]) == 1 then return false end
 redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
 redis.call('XADD', KEYS[2], '*', 'detection_id', ARGV[2], 'kind', 'enhanced', 'value', ARGV[3])
 redis.call('XADD', KEYS[4], '*', 'kind', 'enhanced', 'value', ARGV[3])
 redis.call('SADD', KEYS[3], ARGV[1])
-return 1
+redis.call('HSET', KEYS[5], ARGV[1], ARGV[3])
+return ARGV[3]
 """
+
+
+class StaleEvaluation(ValueError):
+    pass
+
+
+def candidate_revision(candidate):
+    return hashlib.sha256(json.dumps(candidate,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
 def now():
@@ -66,6 +77,17 @@ class Store:
     def location(self,source_id):
         raw=self.redis.hget('rgb:locations',source_id)
         return json.loads(raw) if raw else None
+
+    def location_at(self,source_id,observed_at):
+        observed=datetime.fromisoformat(observed_at)
+        latest=self.location(source_id)
+        if not latest or datetime.fromisoformat(latest['changed_at'])<=observed:return latest
+        applicable=None
+        for _,fields in self.stream('rgb:location-updates'):
+            loc=json.loads(fields['value'])
+            if loc['source_id']==source_id and datetime.fromisoformat(loc['changed_at'])<=observed:
+                if not applicable or loc['version']>applicable['version']:applicable=loc
+        return applicable
 
     def update_location(self,source_id,values,actor=None):
         script="""
@@ -138,7 +160,8 @@ class Store:
             candidate=projection.get('candidate')
             accepted=bool(candidate and candidate['confidence']>=settings['vlm_threshold'])
             displayed=value(d,candidate,settings)
-            projected.append({**d,'detection_id':key,'display_label':displayed['label'],'display_confidence':displayed['confidence'],'label_provider':displayed['provider'],'enhancement':candidate,'enhancement_accepted':accepted})
+            context={'candidate_revision':candidate_revision(candidate),'settings_version':settings['version'],'mode':settings['display_mode']}
+            projected.append({**d,'detection_id':key,'display_label':displayed['label'],'display_confidence':displayed['confidence'],'label_provider':displayed['provider'],'enhancement':candidate,'enhancement_accepted':accepted,'review_context':context})
         event['detections']=projected
         opinions=self.redis.hget('rgb:opinions',event_id)
         event['opinions']=json.loads(opinions) if opinions else []
@@ -160,12 +183,33 @@ class Store:
 
     def enhance(self,event,index,candidate,job_id):
         key=detection_id(event['event_id'],index)
+        saved=self.enhancement_for_job(key,job_id)
+        if saved:return saved['candidate']
         raw=self.redis.hget('rgb:detections',key)
         projection=json.loads(raw)
         projection['candidate']={**candidate,'job_id':job_id}
         projection['decision_settings']=self.settings()
         projection['updated_at']=now()
-        self.redis.eval(ENHANCE,4,'rgb:detections','rgb:detection-updates','rgb:enhancement-ids','rgb:detection:'+key+':events',job_id+':'+key,key,json.dumps(projection))
+        saved=self.redis.eval(ENHANCE,5,'rgb:detections','rgb:detection-updates','rgb:enhancement-ids','rgb:detection:'+key+':events','rgb:enhancement-values',job_id+':'+key,key,json.dumps(projection))
+        if not saved:
+            saved=self.enhancement_for_job(key,job_id)
+            if not saved:raise RuntimeError('Enhancement deduplication record missing')
+            return saved['candidate']
+        return json.loads(saved)['candidate']
+
+    def enhancement_for_job(self,key,job_id):
+        identity=job_id+':'+key
+        saved=self.redis.hget('rgb:enhancement-values',identity)
+        if saved:return json.loads(saved)
+        # Recover enhancement values written before the per-job value index existed.
+        if self.redis.sismember('rgb:enhancement-ids',identity):
+            for _,fields in self.stream('rgb:detection:'+key+':events'):
+                if fields['kind']=='enhanced':
+                    saved=json.loads(fields['value'])
+                    if saved['candidate'].get('job_id')==job_id:
+                        self.redis.hsetnx('rgb:enhancement-values',identity,fields['value'])
+                        return saved
+        return None
 
     def record_attempt(self,event,indices,attempt):
         attempt['scene_id']=event['event_id']
@@ -185,12 +229,21 @@ class Store:
                 pipe.xadd('rgb:detection-updates',{'detection_id':key,'kind':'model_attempt','value':encoded})
             pipe.execute()
 
-    def evaluate(self,key,values,actor=None):
+    def evaluate(self,key,values,context,actor=None):
         projection=self.redis.hget('rgb:detections',key)
         if not projection:return None
         projection=json.loads(projection)
-        settings=self.settings()
-        review={'evaluation_id':str(uuid4()),'detection_id':key,'scene_id':projection['scene_id'],'source_id':projection['source_id'],'reviewed_at':now(),'actor':actor,'initial':projection['initial'],'candidate':projection['candidate'],'settings':settings,'mode':settings['display_mode'],**values}
+        if context.get('candidate_revision')!=candidate_revision(projection['candidate']):
+            raise StaleEvaluation('The model reading changed; refresh before evaluating it')
+        version=context.get('settings_version')
+        settings=DEFAULT_SETTINGS if version==0 else None
+        if version!=0:
+            for _,fields in self.stream('rgb:settings-updates'):
+                recorded=json.loads(fields['value'])
+                if recorded['version']==version:settings={**DEFAULT_SETTINGS,**recorded};break
+        if settings is None or context.get('mode')!=settings['display_mode']:
+            raise StaleEvaluation('The displayed settings could not be resolved')
+        review={'evaluation_id':str(uuid4()),'detection_id':key,'scene_id':projection['scene_id'],'source_id':projection['source_id'],'reviewed_at':now(),'actor':actor,'initial':projection['initial'],'candidate':projection['candidate'],'settings':settings,'mode':settings['display_mode'],'review_context':context,**values}
         encoded=json.dumps(review)
         with self.redis.pipeline(transaction=True) as pipe:
             pipe.xadd('rgb:evaluations',{'value':encoded})

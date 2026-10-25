@@ -29,6 +29,22 @@ that return errors retain their responses and error information. Processing
 failures append separately. A completed job is not reissued after a cursor
 checkpoint interruption; a new requested analysis creates a new job.
 
+## Pause VLM work
+
+**Pause VLM** holds new VLM requests, including manually queued analyses.
+The current request finishes and its result is recorded. The control shows
+**Paused · current request finishing** until that request ends, then
+**Paused · VLM idle**. Camera detection and observation recording continue.
+**Resume VLM** processes the held queue, including unfinished boxes in an
+interrupted job. Persisted readings from that job are reused.
+
+Pause is a durable, audited setting. It survives service restarts. The same
+origin settings API accepts `{"vlm_paused":true}` with the
+`X-RGB-Request: settings` header; `false` resumes work. `/api/vlm/status`
+returns the pause setting and active request identity. Export schema5 adds
+the nullable boolean `vlm_paused` column to the settings table. Older audit
+rows retain null when that field was not recorded.
+
 Live labels use completed readings joined by a board-assigned `track_id`.
 Tracks use one-to-one, same-class box association at IoU at least0.5 between
 successive frames. A detection gap longer than3s ends the track. Restarting
@@ -63,7 +79,12 @@ visual reason, request outcomes and append-only history. **Evaluate detection**
 records a reference label, separate classifier/VLM correctness outcomes and
 notes and the selected display mode. Each evaluation snapshots the exact initial and enhanced values and
 threshold revision, with timestamp and the authenticated identity when supplied
-by LaminarAuth. A later evaluation appends another record.
+by LaminarAuth. A later evaluation appends another record. Open or edited
+evaluation forms retain their inputs during polling. **Discard draft and
+refresh** loads the latest reading. Evaluation requests include the displayed
+`review_context` (candidate hash, setting revision and mode). A changed
+candidate returns409 without recording an evaluation. Later settings changes
+do not alter the mode or threshold revision associated with the displayed form.
 
 ## Downloads
 
@@ -77,7 +98,7 @@ preserve column types, nullable values, UTC timestamps and join IDs. Tables:
 | material_readings | One material reading per current detection candidate, including score, reason, threshold result and model/attempt IDs |
 | detection_updates | Every initial/attempt/enhancement/evaluation/processing-failure update |
 | model_attempts | Started and terminal request records, joined by attempt_id |
-| settings | Threshold revisions and operator identity |
+| settings | Threshold, display mode and pause revisions with operator identity |
 | evaluations | Recorded reference labels and correctness outcomes |
 | location_updates | Opt-in location setting revisions, coordinates, method, accuracy and operator |
 | legacy_opinions | Previously retained scene descriptions and sampling outcomes |
@@ -164,3 +185,12 @@ rows include location method/revision, coordinates and accuracy where captured.
 The source-location GET/POST endpoint is `/api/sources/<source_id>/location`.
 Writes require the authenticated origin and the `X-RGB-Request: location`
 header. Board-supplied location claims remain overridden by source settings.
+Buffered observations use the location revision effective at their capture
+timestamp. Delivery after a location change does not move older observations
+to the new location.
+
+The browser request uses normal accuracy with a20s timeout. Coordinates fill
+the fields as soon as they arrive and remain there if saving fails. A provider
+timeout reports that no coordinates arrived. Switching cameras before the
+callback cancels the assignment; a delayed response cannot populate another
+camera's fields.

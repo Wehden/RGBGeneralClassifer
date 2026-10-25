@@ -22,6 +22,14 @@ SCHEMA['properties']['observations']['items']['properties']['materials']={'type'
 SCHEMA['properties']['observations']['items']['required'].append('materials')
 
 
+class AnalysisPaused(Exception):
+    pass
+
+
+def check_pause(store):
+    if store and store.settings()['vlm_paused']:raise AnalysisPaused()
+
+
 def jpeg(image):
     out=io.BytesIO()
     image.save(out,'JPEG',quality=85)
@@ -40,6 +48,7 @@ def crops(event,root):
 
 
 def read_boxes(endpoint,event,full,items,store=None,job_id=None):
+    check_pause(store)
     metadata=[{'box_index':i['index'],'classifier_label':event['detections'][i['index']]['label'],'classifier_confidence':event['detections'][i['index']]['confidence']} for i in items]
     prompt=('Read each numbered object crop. Image 1 is the full scene for context; subsequent images are the crops in the listed order. '
             'For each crop, identify the object with the most specific label supported by its appearance, then compare your reading to the classifier answer. '
@@ -58,8 +67,10 @@ def read_boxes(endpoint,event,full,items,store=None,job_id=None):
         attempt['model_inventory']={'observed_at':now(),'models':[m for m in inventory.json()['models'] if m.get('name')==endpoint['model']]}
     except (requests.RequestException,KeyError,TypeError,ValueError) as exc:
         attempt['model_inventory']={'observed_at':now(),'error_type':type(exc).__name__}
+    check_pause(store)
     attempt['outcome']='started'
     if store:store.record_attempt(event,[i['index'] for i in items],attempt)
+    if store:store.redis.set('rgb:vlm:active',json.dumps({k:attempt[k] for k in ['attempt_id','job_id','model','started_at']}),ex=120)
     started=time.monotonic()
     try:
         response=requests.post(endpoint['url'].rstrip('/')+'/api/chat',json=body,timeout=(5,90))
@@ -80,7 +91,9 @@ def read_boxes(endpoint,event,full,items,store=None,job_id=None):
         raise
     finally:
         attempt.update(finished_at=now(),latency_ms=round((time.monotonic()-started)*1000,3))
-        if store:store.record_attempt(event,[i['index'] for i in items],attempt)
+        if store:
+            try:store.record_attempt(event,[i['index'] for i in items],attempt)
+            finally:store.redis.delete('rgb:vlm:active')
 
 
 def validate_readings(payload,items):
@@ -111,17 +124,28 @@ def validate_readings(payload,items):
 
 
 def analyze(store,event,endpoints,job_id):
+    check_pause(store)
     store.ensure_detections(event)
     state={'status':'running','schema_version':3,'job_id':job_id,'started_at':now(),'completed_boxes':0,'total_boxes':len(event['detections'])}
     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
     full,all_crops=crops(event,store.root)
     opinions=[]
     chosen={}
+    for index,d in enumerate(event['detections']):
+        saved=store.enhancement_for_job(d['detection_id'],job_id)
+        if saved:chosen[index]=saved['candidate']
+    state['completed_boxes']=len(chosen)
+    store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
     failures=0
     for endpoint in endpoints:
         opinion={'kind':'box_comparisons','model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'readings':[],'errors':[]}
         for start in range(0,len(all_crops),4):
             batch=all_crops[start:start+4]
+            recovered=[chosen[i['index']] for i in batch if i['index'] in chosen and chosen[i['index']].get('model')==endpoint['model'] and chosen[i['index']].get('endpoint')==endpoint['url']]
+            opinion['readings'].extend(recovered)
+            recovered_indices={r['box_index'] for r in recovered}
+            batch=[i for i in batch if i['index'] not in recovered_indices]
+            if not batch:continue
             try:
                 readings,attempt_id=read_boxes(endpoint,event,full,batch,store,job_id)
                 for reading in readings:
@@ -129,8 +153,7 @@ def analyze(store,event,endpoints,job_id):
                     candidate={**reading,'attempt_id':attempt_id,'model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'fingerprint':all_crops[index]['fingerprint']}
                     opinion['readings'].append(candidate)
                     if index not in chosen:
-                        store.enhance(event,index,candidate,job_id)
-                        chosen[index]=candidate
+                        chosen[index]=store.enhance(event,index,candidate,job_id)
                     state['completed_boxes']=len(chosen)
                     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
             except (requests.RequestException,KeyError,TypeError,ValueError) as exc:
@@ -162,8 +185,12 @@ def run(store,endpoints):
     while True:
         try:
             if cursor is None:
-                cursor=store.redis.get('rgb:vlm:cursor') or '0-0'
-                request_cursor=store.redis.get('rgb:analysis:request_cursor') or '0-0'
+                initial_cursor=store.redis.get('rgb:vlm:cursor') or '0-0'
+                initial_request_cursor=store.redis.get('rgb:analysis:request_cursor') or '0-0'
+                cursor,request_cursor=initial_cursor,initial_request_cursor
+            if store.settings()['vlm_paused']:
+                time.sleep(1)
+                continue
             streams=store.redis.xread({'rgb:analysis:requests':request_cursor,'rgb:events':cursor},count=1,block=2000)
             if not streams:continue
             stream,rows=streams[0]
@@ -178,6 +205,11 @@ def run(store,endpoints):
                     terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'}
                     if not (terminal and (not manual or state.get('job_id')==job_id)):
                         analyze(store,event,endpoints,job_id)
+            except AnalysisPaused:
+                state=json.loads(store.redis.hget('rgb:analysis',event_id) or '{}')
+                state.update(status='paused',job_id=job_id)
+                store.redis.hset('rgb:analysis',event_id,json.dumps(state))
+                continue
             except RedisError:
                 raise
             except Exception as exc:

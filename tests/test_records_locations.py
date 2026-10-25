@@ -1,5 +1,6 @@
 import json
 from uuid import uuid4
+from datetime import datetime, timezone
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -45,7 +46,7 @@ def test_location_is_opt_in_audited_and_only_applies_to_future_observations(clie
     r=c.post('/api/sources/portentauno/location',json=payload,headers={'X-RGB-Request':'location','X-Laminarauth-Identity':'operator'})
     assert r.status_code==200
     assert r.json['actor']=='operator'
-    event['event_id']=str(uuid4());ingest(c,event)
+    event.update(event_id=str(uuid4()),observed_at=datetime.now(timezone.utc).isoformat());ingest(c,event)
     saved=store.raw(event['event_id'])
     assert saved['location']=='Home desk'
     assert saved['location_record']['version']==1
@@ -54,7 +55,7 @@ def test_location_is_opt_in_audited_and_only_applies_to_future_observations(clie
     assert c.get('/api/review/records?location=home').json['records'][0]['observation_id']==event['event_id']
     disabled={**payload,'method':'disabled'}
     c.post('/api/sources/portentauno/location',json=disabled,headers={'X-RGB-Request':'location'})
-    event['event_id']=str(uuid4());ingest(c,event)
+    event.update(event_id=str(uuid4()),observed_at=datetime.now(timezone.utc).isoformat());ingest(c,event)
     assert store.raw(event['event_id'])['location'] is None
     assert store.raw(old_id)['location']=='Teaching bench'
     assert store.redis.xlen('rgb:location-updates')==2

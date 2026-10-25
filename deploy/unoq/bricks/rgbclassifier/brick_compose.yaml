@@ -1,6 +1,6 @@
 services:
   detector:
-    image: rgb-classifier:unoq-20261024-v6
+    image: rgb-classifier:unoq-20261024-v7
     restart: unless-stopped
     user: '1000:1000'
     group_add: ['44']

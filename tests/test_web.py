@@ -117,6 +117,20 @@ def test_board_policy_requires_token_and_tracks_live_thresholds(client):
     assert r.json['refinements'] is None
 
 
+def test_mode_updates_preserve_thresholds_and_are_audited(client):
+    c,store=client
+    headers={'X-RGB-Request':'settings'}
+    r=c.post('/api/settings',json={'display_mode':'materials'},headers=headers)
+    assert r.status_code==200
+    assert r.json['display_mode']=='materials'
+    assert r.json['detector_threshold']==.45
+    r=c.post('/api/settings',json={'detector_threshold':.4,'vlm_threshold':.7},headers=headers)
+    assert r.json['display_mode']=='materials'
+    assert store.redis.xlen('rgb:settings-updates')==2
+    assert c.post('/api/settings',json={'display_mode':'invalid'},headers=headers).status_code==400
+    assert c.post('/api/settings',json={'display_mode':[]},headers=headers).status_code==400
+
+
 def test_review_and_analysis_routes_stay_off_ingest_role(client,event,monkeypatch):
     c,_=client
     monkeypatch.setenv('ROLE','ingest')

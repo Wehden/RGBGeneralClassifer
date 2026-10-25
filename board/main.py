@@ -17,6 +17,8 @@ from flask import Flask, Response, jsonify
 from waitress import serve
 from board.detector import Detector, overlay
 from board.refinements import match
+from board.tracking import Tracker
+from common.display import value
 from common.geometry import bounds, fingerprint
 
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +35,7 @@ if not 0.1 <= MAX_FPS <= 30:
 cv2.setNumThreads(1)
 MODEL = 'efficientdet-lite0-coco-uint8'
 MODEL_SHA = hashlib.sha256(open('/app/models/efficientdet-lite0.tflite', 'rb').read()).hexdigest()
-policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'version': 0}, 'refinements': None}
+policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'display_mode': 'objects', 'version': 0}, 'refinements': None}
 DB = os.getenv('OUTBOX_DB', '/data/outbox.sqlite3')
 
 
@@ -58,6 +60,7 @@ def camera():
 
 def capture():
     detector = Detector('/app/models/efficientdet-lite0.tflite', '/app/models/labelmap.txt')
+    tracker = Tracker()
     cap = None
     last_event = 0
     while True:
@@ -72,14 +75,21 @@ def capture():
             current_policy = policy
             detector.threshold = current_policy['settings']['detector_threshold']
             detections, ms = detector.detect(frame)
+            tracker.update(detections, time.monotonic())
             for d in detections:
+                reading = None
                 if current_policy['refinements']:
                     x1,y1,x2,y2 = bounds(d['box'],frame.shape[1],frame.shape[0])
                     crop = frame[y1:y2,x1:x2]
                     digest = fingerprint(lambda x,y: crop[y,x][::-1],crop.shape[1],crop.shape[0])
                     reading = match(d,digest,current_policy['refinements'],time.time(),current_policy['settings']['vlm_threshold'])
                     if reading:
-                        d.update(display_label=reading['label'],display_confidence=reading['confidence'],detection_id=reading['detection_id'],label_provider='vlm',live_value={key:reading[key] for key in ['label','confidence','detection_id','reference_event_id','model','match_iou','match_hash_distance','match_age_s']})
+                        d.update(detection_id=reading['detection_id'],live_value={key:reading[key] for key in ['label','confidence','detection_id','reference_event_id','model','match_iou','match_hash_distance','match_age_s','match_method']})
+                        d['live_value'].update(materials=reading.get('materials',[]),display_mode=current_policy['settings'].get('display_mode','objects'))
+                displayed = value(d, reading, current_policy['settings'])
+                d.update(display_label=displayed['label'],display_confidence=displayed['confidence'],label_provider=displayed['provider'])
+                if 'live_value' in d:
+                    d['live_value'].update(display_label=displayed['label'],display_confidence=displayed['confidence'])
             ok, jpeg = cv2.imencode('.jpg', overlay(frame, detections), [cv2.IMWRITE_JPEG_QUALITY, 80])
             if not ok:
                 raise RuntimeError('JPEG encoding failed')

@@ -75,9 +75,11 @@ def create_app(store, sources=None, ingest_token=None):
         if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc != request.host:
             return jsonify(error='Origin mismatch'), 403
         data=request.get_json(silent=True)
-        if not isinstance(data,dict) or set(data)!={'detector_threshold','vlm_threshold'}:
-            return jsonify(error='Expected both confidence thresholds'),400
-        if not all(type(v) in (int,float) and .05<=v<=.99 for v in data.values()):
+        if not isinstance(data,dict) or set(data) not in [{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'}]:
+            return jsonify(error='Expected confidence thresholds or display mode'),400
+        if 'display_mode' in data and data['display_mode'] not in ['objects','materials']:
+            return jsonify(error='Expected objects or materials mode'),400
+        if not all(type(v) in (int,float) and .05<=v<=.99 for k,v in data.items() if k!='display_mode'):
             return jsonify(error='Thresholds must be between 0.05 and 0.99'),400
         return jsonify(store.update_settings(data,actor=request.headers.get('X-Laminarauth-Identity')))
 
@@ -132,7 +134,8 @@ def create_app(store, sources=None, ingest_token=None):
     def evaluate_detection(key):
         if not request.is_json or request.headers.get('X-RGB-Request')!='evaluation':return jsonify(error='Expected evaluation request'),400
         data=request.get_json(silent=True)
-        if not isinstance(data,dict) or set(data)!={'reference_label','detector_result','vlm_result','notes'}:return jsonify(error='Invalid evaluation'),400
+        if not isinstance(data,dict) or set(data) not in [{'reference_label','detector_result','vlm_result','notes'},{'reference_label','detector_result','vlm_result','notes','mode'}]:return jsonify(error='Invalid evaluation'),400
+        if 'mode' in data and data['mode'] not in ['objects','materials']:return jsonify(error='Invalid evaluation mode'),400
         if not isinstance(data['reference_label'],str) or not 1<=len(data['reference_label'])<=120 or not isinstance(data['notes'],str) or len(data['notes'])>4000:return jsonify(error='Invalid evaluation'),400
         if data['detector_result'] not in {'correct','incorrect','unscored'} or data['vlm_result'] not in {'correct','incorrect','unscored'}:return jsonify(error='Invalid outcome'),400
         try:key=str(UUID(key))

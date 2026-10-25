@@ -28,6 +28,7 @@ def test_review_tables_roundtrip_and_link_initial_enhancement_failure_evaluation
                 return pq.read_table(raw) if format=='parquet' else pa.ipc.open_file(raw).read_all()
             detections=read('detections').to_pylist()
             assert detections[0]['initial_label']=='bottle'
+            assert detections[0]['display_mode']=='objects'
             assert detections[0]['display_label']=='beverage can'
             assert detections[0]['enhanced_confidence']==.9
             assert detections[0]['analysis_status']=='failed'
@@ -38,6 +39,12 @@ def test_review_tables_roundtrip_and_link_initial_enhancement_failure_evaluation
             reviews=read('evaluations').to_pylist()
             assert reviews[0]['detection_id']==detections[0]['detection_id']
             assert reviews[0]['detector_result']=='incorrect'
+            assert reviews[0]['mode']=='objects'
+            materials=read('material_readings').to_pylist()
+            assert materials[0]['label']=='metal'
+            assert materials[0]['confidence']==.93
+            assert materials[0]['accepted'] is True
+            assert materials[0]['detection_id']==detections[0]['detection_id']
             assert read('settings').num_rows==0
             assert 'projection.sqlite3' not in bundle.namelist()
     finally:directory.cleanup()

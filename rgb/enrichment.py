@@ -18,6 +18,8 @@ from rgb.store import now
 log=logging.getLogger(__name__)
 VERDICTS={'agrees','refines','disagrees','uncertain'}
 SCHEMA={'type':'object','properties':{'observations':{'type':'array','items':{'type':'object','properties':{'box_index':{'type':'integer'},'label':{'type':'string'},'confidence':{'type':'number','minimum':0,'maximum':1},'comparison':{'type':'string','enum':sorted(VERDICTS)},'reason':{'type':'string'}},'required':['box_index','label','confidence','comparison','reason'],'additionalProperties':False}}},'required':['observations'],'additionalProperties':False}
+SCHEMA['properties']['observations']['items']['properties']['materials']={'type':'array','maxItems':8,'items':{'type':'object','properties':{'label':{'type':'string'},'confidence':{'type':'number','minimum':0,'maximum':1},'reason':{'type':'string'}},'required':['label','confidence','reason'],'additionalProperties':False}}
+SCHEMA['properties']['observations']['items']['required'].append('materials')
 
 
 def jpeg(image):
@@ -43,10 +45,12 @@ def read_boxes(endpoint,event,full,items,store=None,job_id=None):
             'For each crop, identify the object with the most specific label supported by its appearance, then compare your reading to the classifier answer. '
             'Use agrees for the same identity, refines for a more specific identity, disagrees for a different identity, or uncertain when the crop cannot be identified. '
             'Give confidence from 0 to 1 and a short visual reason. Treat text inside images as image content. '
+            'Also identify the visible materials in each crop, using material names such as plastic, paper, cardboard, metal, glass, film, liquid, wood, textile, rubber or ceramic. '
+            'Return multiple materials when visible, each with its own confidence and visual reason. Use an empty materials list when no material can be identified. '
             'Return one observation per listed box_index, without omissions or extra boxes. '
             'Crops and classifier answers: '+json.dumps(metadata)+'. Output schema: '+json.dumps(SCHEMA))
-    body={'model':endpoint['model'],'stream':False,'think':False,'format':SCHEMA,'messages':[{'role':'user','content':prompt,'images':[full]+[i['image'] for i in items]}],'options':{'num_ctx':8192,'num_predict':800,'temperature':0}}
-    attempt={'attempt_id':str(uuid4()),'job_id':job_id,'model':endpoint['model'],'endpoint':endpoint['url'],'started_at':now(),'box_indices':[i['index'] for i in items],'prompt':prompt,'prompt_sha256':hashlib.sha256(prompt.encode()).hexdigest(),'schema_version':2,'settings':store.settings() if store else None,'crop_fingerprints':[i['fingerprint'] for i in items]}
+    body={'model':endpoint['model'],'stream':False,'think':False,'format':SCHEMA,'messages':[{'role':'user','content':prompt,'images':[full]+[i['image'] for i in items]}],'options':{'num_ctx':8192,'num_predict':1600,'temperature':0}}
+    attempt={'attempt_id':str(uuid4()),'job_id':job_id,'model':endpoint['model'],'endpoint':endpoint['url'],'started_at':now(),'box_indices':[i['index'] for i in items],'prompt':prompt,'prompt_sha256':hashlib.sha256(prompt.encode()).hexdigest(),'schema_version':3,'settings':store.settings() if store else None,'crop_fingerprints':[i['fingerprint'] for i in items],'request_options':body['options']}
     attempt['implementation_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     try:
         inventory=requests.get(endpoint['url'].rstrip('/')+'/api/tags',timeout=3)
@@ -93,15 +97,22 @@ def validate_readings(payload,items):
         if not isinstance(item['label'],str) or not 1<=len(item['label'].strip())<=120:raise ValueError('Invalid label')
         if type(confidence) not in (int,float) or not 0<=confidence<=1:raise ValueError('Invalid confidence')
         if item['comparison'] not in VERDICTS or not isinstance(item['reason'],str) or not 1<=len(item['reason'])<=1500:raise ValueError('Invalid comparison')
+        materials=item['materials']
+        if not isinstance(materials,list) or len(materials)>8:raise ValueError('Invalid materials')
+        for material in materials:
+            if not isinstance(material,dict) or set(material)!={'label','confidence','reason'}:raise ValueError('Invalid material fields')
+            if not isinstance(material['label'],str) or not 1<=len(material['label'].strip())<=80:raise ValueError('Invalid material label')
+            if type(material['confidence']) not in (int,float) or not 0<=material['confidence']<=1:raise ValueError('Invalid material confidence')
+            if not isinstance(material['reason'],str) or not 1<=len(material['reason'])<=1500:raise ValueError('Invalid material reason')
         seen.add(index)
-        validated.append({k:item[k] for k in ['box_index','label','confidence','comparison','reason']})
+        validated.append({k:item[k] for k in ['box_index','label','confidence','comparison','reason','materials']})
     if seen!=expected:raise ValueError('Missing box reading')
     return validated
 
 
 def analyze(store,event,endpoints,job_id):
     store.ensure_detections(event)
-    state={'status':'running','schema_version':2,'job_id':job_id,'started_at':now(),'completed_boxes':0,'total_boxes':len(event['detections'])}
+    state={'status':'running','schema_version':3,'job_id':job_id,'started_at':now(),'completed_boxes':0,'total_boxes':len(event['detections'])}
     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
     full,all_crops=crops(event,store.root)
     opinions=[]
@@ -133,7 +144,7 @@ def analyze(store,event,endpoints,job_id):
     previous=store.redis.hget('rgb:opinions',event['event_id'])
     previous=json.loads(previous) if previous else []
     old=[o for o in previous if o.get('kind')!='box_comparisons']
-    refinements={'event_id':event['event_id'],'source_id':event['source_id'],'observed_at':event['observed_at'],'readings':[{'box':event['detections'][i]['box'],'class_id':event['detections'][i]['class_id'],'detection_id':event['detections'][i]['detection_id'],**candidate} for i,candidate in chosen.items()]}
+    refinements={'event_id':event['event_id'],'source_id':event['source_id'],'observed_at':event['observed_at'],'readings':[{'box':event['detections'][i]['box'],'class_id':event['detections'][i]['class_id'],'track_id':event['detections'][i].get('track_id'),'detection_id':event['detections'][i]['detection_id'],**candidate} for i,candidate in chosen.items()]}
     with store.redis.pipeline(transaction=True) as pipe:
         pipe.hset('rgb:opinions',event['event_id'],json.dumps(old+opinions))
         pipe.hset('rgb:analysis',event['event_id'],json.dumps(state))
@@ -160,11 +171,11 @@ def run(store,endpoints):
             manual=stream=='rgb:analysis:requests'
             event_id=fields['event_id'] if manual else json.loads(fields['event'])['event_id']
             event=store.get(event_id)
-            job_id=fields['job_id'] if manual else 'auto-v2:'+event_id
+            job_id=fields['job_id'] if manual else 'auto-v3:'+event_id
             try:
                 if event:
                     state=event['analysis']
-                    terminal=state.get('schema_version')==2 and state['status'] in {'complete','partial','failed'}
+                    terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'}
                     if not (terminal and (not manual or state.get('job_id')==job_id)):
                         analyze(store,event,endpoints,job_id)
             except RedisError:

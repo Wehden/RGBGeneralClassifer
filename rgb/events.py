@@ -39,11 +39,12 @@ def validate_event(data, sources):
                 if not isinstance(live,dict) or not isinstance(live['label'],str) or not 1<=len(live['label'])<=120:
                     raise ValueError('Invalid live label')
                 UUID(live['detection_id']);UUID(live['reference_event_id'])
-                for key,lo,hi in [('confidence',0,1),('match_iou',0,1),('match_hash_distance',0,64),('match_age_s',0,90)]:
-                    if type(live[key]) not in (int,float) or not lo<=live[key]<=hi:
+                for key,lo,hi in [('confidence',0,1),('match_iou',0,1),('match_hash_distance',0,64),('match_age_s',0,float('inf'))]:
+                    if type(live[key]) not in (int,float) or not math.isfinite(live[key]) or not lo<=live[key]<=hi:
                         raise ValueError('Invalid live match')
                 if not isinstance(live['model'],str) or len(live['model'])>120:raise ValueError('Invalid live model')
-            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id']),**({'live_value':live} if live is not None else {})})
+            track_id=str(UUID(d['track_id'])) if d.get('track_id') else None
+            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id']),**({'track_id':track_id} if track_id else {}),**({'live_value':live} if live is not None else {})})
         detector = data['detector']
         if not isinstance(detector['model'], str) or len(detector['model']) > 120 or not re.fullmatch('[a-f0-9]{64}', detector['sha256']):
             raise ValueError('Invalid model provenance')

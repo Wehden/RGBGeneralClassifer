@@ -29,18 +29,39 @@ that return errors retain their responses and error information. Processing
 failures append separately. A completed job is not reissued after a cursor
 checkpoint interruption; a new requested analysis creates a new job.
 
-Live labels use completed readings matched to the current detection by class,
-box overlap and crop fingerprint. The current matching rule requires IoU at
-least0.75, hash distance at most4/64 bits, and an observation age at most90s.
-Captured `live_value` records the applied reading ID, label, confidence, overlap,
-hash distance and age. The live frame displays the selected label and score.
+Live labels use completed readings joined by a board-assigned `track_id`.
+Tracks use one-to-one, same-class box association at IoU at least0.5 between
+successive frames. A detection gap longer than3s ends the track. Restarting
+the board creates new track UUIDs. A changing screen image no longer rejects
+the reading: crop hash distance, box overlap and reading age remain recorded
+measurements, rather than label-admission gates. Captured `live_value` retains
+the source detection/observation IDs, selected display mode, actual displayed
+label/score, object reading, materials, matching method and measurements.
+
+## Object and material modes
+
+The dashboard's **Display** selector switches between Objects and Materials.
+The mode is a saved, audited setting and reaches the board through its normal
+policy poll. Object and material readings are produced together by Qwen for
+each new archived box. Material readings contain an open-text label, confidence
+and visual reason; multiple materials can be recorded for one box. Material
+mode displays readings individually meeting the VLM threshold, joined with `+`.
+The overlay's combined score is the minimum score among the displayed materials;
+the review and exports retain each individual score.
+
+Material mode does not infer a material from a COCO object label. A legacy
+reading without materials is shown as not read; Analyze detections obtains
+new object and material readings. Model scores below the display threshold
+remain available in review and export. The current region proposal stage is
+still EfficientDet's COCO detector; this mode does not add regions for objects
+that detector missed.
 
 ## Evaluation
 
 The review pane exposes the initial label, enhanced label/score, comparison,
 visual reason, request outcomes and append-only history. **Evaluate detection**
 records a reference label, separate classifier/VLM correctness outcomes and
-notes. Each evaluation snapshots the exact initial and enhanced values and
+notes and the selected display mode. Each evaluation snapshots the exact initial and enhanced values and
 threshold revision, with timestamp and the authenticated identity when supplied
 by LaminarAuth. A later evaluation appends another record.
 
@@ -52,7 +73,8 @@ preserve column types, nullable values, UTC timestamps and join IDs. Tables:
 | Table | Row meaning |
 |---|---|
 | observations | Initial camera observation and image/model provenance |
-| detections | One detection, its initial score, enhanced value, current display, and live matching values |
+| detections | One detection, track ID, initial score, enhanced value, display mode/value, and live matching values |
+| material_readings | One material reading per current detection candidate, including score, reason, threshold result and model/attempt IDs |
 | detection_updates | Every initial/attempt/enhancement/evaluation/processing-failure update |
 | model_attempts | Started and terminal request records, joined by attempt_id |
 | settings | Threshold revisions and operator identity |

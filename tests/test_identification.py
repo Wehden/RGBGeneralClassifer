@@ -29,7 +29,7 @@ def recorded(tmp_path,event,sources):
 
 
 def reading(index=0,label='beverage can',confidence=.9):
-    return {'box_index':index,'label':label,'confidence':confidence,'comparison':'disagrees','reason':'Cylindrical body and pull-tab lid.'}
+    return {'box_index':index,'label':label,'confidence':confidence,'comparison':'disagrees','reason':'Cylindrical body and pull-tab lid.','materials':[{'label':'metal','confidence':.93,'reason':'Metallic body and lid.'}]}
 
 
 def response(readings):
@@ -100,15 +100,17 @@ def test_rejects_mismatched_or_invalid_box_answers(readings):
     with pytest.raises(ValueError):validate_readings(payload,[{'index':0}])
 
 
-def test_live_label_requires_current_visual_and_geometry_match():
-    d={'class_id':44,'box':[.1,.2,.8,.9]}
-    ref={'event_id':'scene-id','observed_at':datetime.now(timezone.utc).isoformat(),'readings':[{'class_id':44,'box':d['box'],'fingerprint':'1234000000000000','confidence':.9,'label':'can'}]}
+def test_live_label_follows_track_when_screen_pixels_change():
+    d={'class_id':44,'track_id':'track-a','box':[.1,.2,.8,.9]}
+    ref={'event_id':'scene-id','observed_at':datetime.now(timezone.utc).isoformat(),'readings':[{'class_id':44,'track_id':'track-a','box':d['box'],'fingerprint':'1234000000000000','confidence':.9,'label':'can'}]}
     now=datetime.now(timezone.utc).timestamp()
-    assert match(d,'1234000000000000',ref,now,.65)['label']=='can'
-    assert match(d,'ffffffffffffffff',ref,now,.65) is None
-    assert match({**d,'box':[0,0,.1,.1]},'1234000000000000',ref,now,.65) is None
-    assert match(d,'1234000000000000',ref,now+100,.65) is None
-    assert match(d,'1234000000000000',ref,now,.95) is None
+    matched=match(d,'ffffffffffffffff',ref,now,.65)
+    assert matched['label']=='can'
+    assert matched['match_hash_distance']>4
+    assert matched['match_method']=='continuous_track'
+    assert match({**d,'track_id':'replacement'},'ffffffffffffffff',ref,now,.65) is None
+    assert match(d,'ffffffffffffffff',ref,now+100,.65)['label']=='can'
+    assert match(d,'ffffffffffffffff',ref,now,.95) is None
 
 
 def test_initial_replay_and_legacy_analysis_request(recorded):

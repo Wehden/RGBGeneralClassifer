@@ -5,8 +5,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
+from common.display import value
 
-DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'version':0}
+DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','version':0}
 
 APPEND = """
 local existing = redis.call('HGET', KEYS[1], ARGV[1])
@@ -66,14 +67,16 @@ class Store:
         # One Redis Lua operation preserves concurrent setting revisions and audit.
         script="""
         local version=redis.call('INCR',KEYS[1])
-        local settings=cjson.decode(ARGV[1])
+        local settings=cjson.decode(redis.call('GET',KEYS[2]) or ARGV[2])
+        local updates=cjson.decode(ARGV[1])
+        for key,value in pairs(updates) do settings[key]=value end
         settings.version=version
         local value=cjson.encode(settings)
         redis.call('SET',KEYS[2],value)
         redis.call('XADD',KEYS[3],'*','kind','thresholds','value',value)
         return value
         """
-        return json.loads(self.redis.eval(script,3,'rgb:settings:version','rgb:settings','rgb:settings-updates',json.dumps({**values,'changed_at':now(),'actor':actor})))
+        return json.loads(self.redis.eval(script,3,'rgb:settings:version','rgb:settings','rgb:settings-updates',json.dumps({**values,'changed_at':now(),'actor':actor}),json.dumps(DEFAULT_SETTINGS)))
 
     def save(self,event,image):
         digest=hashlib.sha256(image).hexdigest()
@@ -119,7 +122,8 @@ class Store:
             projection=json.loads(raw) if raw else {'candidate':None}
             candidate=projection.get('candidate')
             accepted=bool(candidate and candidate['confidence']>=settings['vlm_threshold'])
-            projected.append({**d,'detection_id':key,'display_label':candidate['label'] if accepted else d['label'],'label_provider':'vlm' if accepted else 'detector','enhancement':candidate,'enhancement_accepted':accepted})
+            displayed=value(d,candidate,settings)
+            projected.append({**d,'detection_id':key,'display_label':displayed['label'],'display_confidence':displayed['confidence'],'label_provider':displayed['provider'],'enhancement':candidate,'enhancement_accepted':accepted})
         event['detections']=projected
         opinions=self.redis.hget('rgb:opinions',event_id)
         event['opinions']=json.loads(opinions) if opinions else []
@@ -170,7 +174,8 @@ class Store:
         projection=self.redis.hget('rgb:detections',key)
         if not projection:return None
         projection=json.loads(projection)
-        review={'evaluation_id':str(uuid4()),'detection_id':key,'scene_id':projection['scene_id'],'source_id':projection['source_id'],'reviewed_at':now(),'actor':actor,'initial':projection['initial'],'candidate':projection['candidate'],'settings':self.settings(),**values}
+        settings=self.settings()
+        review={'evaluation_id':str(uuid4()),'detection_id':key,'scene_id':projection['scene_id'],'source_id':projection['source_id'],'reviewed_at':now(),'actor':actor,'initial':projection['initial'],'candidate':projection['candidate'],'settings':settings,'mode':settings['display_mode'],**values}
         encoded=json.dumps(review)
         with self.redis.pipeline(transaction=True) as pipe:
             pipe.xadd('rgb:evaluations',{'value':encoded})

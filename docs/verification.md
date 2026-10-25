@@ -170,3 +170,37 @@ Verified 2026-10-24 evening, America/Los_Angeles:
 - Service release image:
   `localhost:30500/rgb-classifier@sha256:81ff482d62d88424ec47563ad5e37022c194409c5152ff760aa2ca436108eef0`.
   Web and ingest use the same digest; only the web role starts the VLM worker.
+
+## Continuous tracks and material mode
+
+Verified 2026-10-24 evening, America/Los_Angeles:
+
+- Investigated a monitor overlay that retained `tv` while Qwen had returned
+  `computer monitor`0.95. The boxes overlapped by0.9715, but the crop hash
+  distance was20 against the former limit4. The crop-content gate was removed
+  in favor of continuous track association; hash distance remains recorded.
+- Uno Q health subsequently reported `label=tv`, `display_label=computer monitor`,
+  `display_confidence=0.95`, `match_method=continuous_track`, hash distance15,
+  IoU0.9661 and reading age53.25s on track
+  `155efa51-6908-4f65-a378-0070315a6d59`.
+- Qwen schema3 returns object readings and a list of material readings together.
+  Actual observation `b2919206-203e-4f48-8a9e-c486fa402cd0` returned plastic0.90
+  and glass0.85 for the monitor region, plastic0.95 for one keyboard region,
+  and metal0.90/plastic0.85 for another keyboard region. These are recorded
+  model outputs, including their individual reasons and request provenance.
+- The public Materials selector saved revision5 and displayed those readings.
+  Object/material mode changes are retained with threshold-setting revisions.
+- Following a user-reported threshold503 during rollout, saved settings still
+  contained revision2, classifier0.45/VLM0.65. A public classifier save to0.46
+  succeeded as revision3 and was read back from the Uno Q. Revision4 restored
+  the classifier to0.45. Recreate service rollouts have a short availability
+  gap; steady-state threshold saves were exercised through the public hostname.
+- 44 tests passed, adding continuous tracks, changed screen content, detection
+  gaps, per-material score validation/filtering, mode auditing, and typed
+  material/evaluation exports.
+- Native board image `rgb-classifier:unoq-20261024-v6`:
+  `sha256:5681fded520199169776313dbe6d430ec7789c9beb55375d68c910e2dc5729b9`.
+- Service image:
+  `localhost:30500/rgb-classifier@sha256:07170eba2e189d2d8b62253cefed99ceefd2a9542075a4957ec67ed82f53959b`.
+- The detector still proposes COCO object boxes. The label map contains no fan
+  class; no open-vocabulary detector has been deployed in this release.

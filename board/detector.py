@@ -52,7 +52,8 @@ def overlay(frame, detections):
         y1, x1, y2, x2 = d['box']
         p1, p2 = (int(x1*w), int(y1*h)), (int(x2*w), int(y2*h))
         cv2.rectangle(result, p1, p2, (70, 230, 160), 2)
-        text = f"{d.get('display_label', d['label'])} {d.get('display_confidence', d['confidence']):.0%}"
+        score = d.get('display_confidence', d['confidence'])
+        text = d.get('display_label', d['label']) + (f" {score:.0%}" if score is not None else '')
         font, scale = cv2.FONT_HERSHEY_SIMPLEX, .45
         (tw, th), baseline = cv2.getTextSize(text, font, scale, 1)
         left = max(0, min(p1[0], w-tw-10))

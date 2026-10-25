@@ -6,7 +6,8 @@ boxes. A k3s service archives observations in Redis Streams and serves a camera,
 history list, and detail pane at https://rgb.wehden.com through LaminarAuth.
 
 Each detection retains its initial classifier result and subsequent VLM readings.
-The live view and archive display the latest accepted value. Confidence
+Object and Material display modes select the latest accepted value for the live
+view and archive. Confidence
 thresholds, request traces, evaluation records and typed review exports are
 available in the dashboard. See [review data](docs/review-data.md).
 

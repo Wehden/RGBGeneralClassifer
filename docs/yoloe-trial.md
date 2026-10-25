@@ -40,7 +40,7 @@ released vocabulary and needs no text encoder on the Uno Q.
 Raw paired readings and image hashes are retained privately with the trial
 results. Examples of prompt-free readings at the configured 0.39 threshold
 included `playing card`, `bureau`, `jack`, `crt screen` on the wide desk image,
-and `cup`, `keyboard`, `office desk` on the second image. 
+and `cup`, `keyboard`, `office desk` on the second image.
 
 ## Runtime and records
 

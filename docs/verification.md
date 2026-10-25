@@ -158,12 +158,15 @@ Verified 2026-10-24 evening, America/Los_Angeles:
 - No evaluation labels were inserted into the operational dataset during
   acceptance. Human evaluation persistence and exported values were exercised
   with isolated test fixtures.
-- Native Uno Q image `rgb-classifier:unoq-20261024-v3` read back as
-  `sha256:26dab9aae02b3bbd3ad5be2b5367b9ee11def90416e62c02fa0a2c607a2a0aef`.
+- Native Uno Q image `rgb-classifier:unoq-20261024-v4` read back as
+  `sha256:2fbb8cc87f95fd0326a01e80175a00a53c3cae89845442f14946a05f6245ef2d`.
   Camera capture was `/dev/video0`. A current health sample measured160.78ms
   inference. A short runtime sample measured73.42% CPU,113.2MiB memory and44.6°C.
   Health and archived observations contained enhanced live labels and their
   reference detection IDs, IoU, crop hash distance and reading age.
+- Live labels use white antialiased text on dark backgrounds, with label
+  positions clamped inside the image. The final live view was checked after
+  the native board rollout.
 - Service release image:
   `localhost:30500/rgb-classifier@sha256:81ff482d62d88424ec47563ad5e37022c194409c5152ff760aa2ca436108eef0`.
   Web and ingest use the same digest; only the web role starts the VLM worker.

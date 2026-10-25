@@ -204,3 +204,12 @@ Verified 2026-10-24 evening, America/Los_Angeles:
   `localhost:30500/rgb-classifier@sha256:07170eba2e189d2d8b62253cefed99ceefd2a9542075a4957ec67ed82f53959b`.
 - The detector still proposes COCO object boxes. The label map contains no fan
   class; no open-vocabulary detector has been deployed in this release.
+- Final schema3 bundles were downloaded through the public page and opened
+  with PyArrow. The Parquet snapshot at04:19:20 UTC contained255 observations,
+  691 detections and58 material rows. The Arrow snapshot at04:19:24 UTC
+  contained255 observations,691 detections and64 material rows. All eight
+  tables were readable. Material rows carried individual scores, reasons,
+  accepted flags and detection/attempt join IDs.
+- The user's subsequent classifier0.39 change saved as revision7 and was read
+  back from the Uno Q. Object mode remained selected. CI passed for the code
+  commit containing material mode and continuous-track matching.

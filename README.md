@@ -41,3 +41,12 @@ identity enforcement. Expose local development on trusted interfaces only.
 
 Model selection and scope are documented in [models/README.md](models/README.md).
 The existing MIT copyright is preserved unchanged.
+
+## Continuous integration
+
+The CI workflow runs on pull requests, pushes to `main`, and manual dispatch.
+It runs the test suite, compiles Python sources, checks both browser scripts,
+verifies the pinned model checksum and builds the service image. JUnit test
+results are retained as a workflow artifact for14 days. PR updates cancel an
+older running check for that PR. Deployment remains manual; the workflow does
+not push images or deploy to Kubernetes or the camera.

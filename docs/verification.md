@@ -229,3 +229,11 @@ Verified 2026-10-24 evening, America/Los_Angeles:
   button. No real browser location or Google Maps request was issued during
   automated acceptance; manual/browser coordinate persistence was tested with
   isolated fixture data. Existing Uno Q location remains unassigned.
+- Public `/records` acceptance filtered `source=unoq&material=plastic`, copied
+  its request URL and followed its continuation cursor. Both page downloads
+  opened in PyArrow with50 unique detection IDs and UTC timestamp types.
+- The public schema4 complete Parquet bundle contained285 observations,
+  799 detections,185 material rows,0 location updates,146 legacy opinions,
+  1870 detection updates,316 attempt records,8 settings revisions and0
+  evaluations. All nine typed tables were readable. The location control
+  showed disabled/revision0 without requesting browser location.

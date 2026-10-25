@@ -1,19 +1,48 @@
 name: CI
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt -r requirements-dev.txt
-      - run: python -m pytest -q
-      - run: python -m compileall -q board rgb
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q --junitxml=test-results.xml
+      - name: Compile Python sources
+        run: python -m compileall -q board rgb common
+      - name: Check browser JavaScript
+        run: |
+          node --check rgb/static/app.js
+          node --check rgb/static/records.js
       - name: Verify pinned model
         run: echo '2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b  models/efficientdet-lite0.tflite' | sha256sum -c -
       - name: Build service
         run: docker build -t rgb-classifier:ci .
+      - name: Retain test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          retention-days: 14

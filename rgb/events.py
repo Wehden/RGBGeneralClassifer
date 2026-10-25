@@ -62,6 +62,9 @@ def validate_event(data, sources):
                 raise ValueError('Invalid detector threshold')
             provenance.update(threshold=detector['threshold'],settings_version=int(detector.get('settings_version',0)))
         event = {'event_id':event_id, 'observed_at':observed.astimezone(timezone.utc).isoformat(), 'received_at':datetime.now(timezone.utc).isoformat(), 'source_id':source_id, 'location':source.get('location') or None, 'location_kind':'configured' if source.get('location') else 'unknown', 'detector':provenance, 'detections':normalized, 'opinions':[]}
+        if source.get('location_record'):
+            event['location_record']=source['location_record']
+            event['location_kind']=source['location_record']['method']
         return event, raw
     except (KeyError, TypeError, ValueError, OverflowError, AttributeError, binascii.Error, OSError, Image.DecompressionBombError) as exc:
         raise InvalidEvent('Invalid observation') from exc

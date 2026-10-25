@@ -5,3 +5,5 @@
 .intro h1{font-size:30px;margin:4px 0}.intro p{margin:6px 0}.controls{margin:18px 0}
 
 .mode{display:flex;align-items:center;gap:12px;font-size:13px;margin-top:14px}.mode select{min-width:150px}#mode-status{font-size:12px;color:var(--green)}
+
+.record-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:18px 0;font-size:13px}.record-actions a,.records-table a{color:var(--green)}.query-form{display:flex;gap:14px;flex-wrap:wrap;align-items:end}.query-form label{display:grid;gap:5px;font-size:12px}.query-form input,.location-form input{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px}.records-table{overflow-x:auto;margin:20px 0}table{width:100%;border-collapse:collapse;font-size:12px}td,th{text-align:left;vertical-align:top;border-bottom:1px solid var(--border);padding:12px}#request-url{display:block;overflow-wrap:anywhere;font-size:12px;color:var(--muted)}.location-form{display:grid;gap:10px;margin-top:12px;font-size:12px}.location-form label{display:grid;gap:4px}.location-form a{color:var(--green)}

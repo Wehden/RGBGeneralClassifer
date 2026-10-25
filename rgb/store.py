@@ -63,6 +63,21 @@ class Store:
         raw=self.redis.get('rgb:settings')
         return {**DEFAULT_SETTINGS,**(json.loads(raw) if raw else {})}
 
+    def location(self,source_id):
+        raw=self.redis.hget('rgb:locations',source_id)
+        return json.loads(raw) if raw else None
+
+    def update_location(self,source_id,values,actor=None):
+        script="""
+        local value=cjson.decode(ARGV[2])
+        value.version=redis.call('INCR',KEYS[1])
+        local encoded=cjson.encode(value)
+        redis.call('HSET',KEYS[2],ARGV[1],encoded)
+        redis.call('XADD',KEYS[3],'*','value',encoded)
+        return encoded
+        """
+        return json.loads(self.redis.eval(script,3,'rgb:location:version','rgb:locations','rgb:location-updates',source_id,json.dumps({'source_id':source_id,'changed_at':now(),'actor':actor,**values})))
+
     def update_settings(self, values, actor=None):
         # One Redis Lua operation preserves concurrent setting revisions and audit.
         script="""

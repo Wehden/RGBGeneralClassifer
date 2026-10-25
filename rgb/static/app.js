@@ -11,8 +11,8 @@ async function status() {
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
   $('live').src = `/api/live/${encodeURIComponent(s.id)}/stream`;
-  $('camera-location').textContent = s.location ? `${s.location} · configured location` : 'Location unknown';
-  status(); clearInterval(timer); timer = setInterval(status, 10000);
+  $('camera-location').textContent = s.location ? `${s.location} · ${s.location_method}` : 'Location unassigned';
+  loadLocation(); status(); clearInterval(timer); timer = setInterval(status, 10000);
 }
 $('live').onerror = () => { $('live-state').textContent = 'Camera unavailable · reconnecting'; setTimeout(live, 5000); };
 async function history(d, node) {
@@ -68,3 +68,25 @@ window.addEventListener('hashchange',()=>{ const match=location.hash.match(/^#ev
 $('mode').onchange=async () => { const mode=$('mode').value; $('mode').disabled=true; try { const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({display_mode:mode})}); if (!r.ok) throw new Error(`Save failed (${r.status})`); settings=await r.json(); $('mode-status').textContent=`Saved revision ${settings.version}`; load(); if (selected) show(selected,true); } catch (e) { $('mode-status').textContent=e.message; $('mode').value=settings.display_mode; } $('mode').disabled=false; };
 $('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('source').onchange = live;
 (async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
+
+async function loadLocation() {
+  try {const loc=await get(`/api/sources/${encodeURIComponent($('source').value)}/location`);$('location-label').value=loc.label??'';$('location-lat').value=loc.latitude??'';$('location-lon').value=loc.longitude??'';
+    $('location-status').textContent=`${loc.method} · revision ${loc.version}`;
+    $('google-maps').hidden=loc.latitude==null;
+    if (loc.latitude!=null) $('google-maps').href=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(loc.latitude+','+loc.longitude)}`;
+  } catch(e) {$('location-status').textContent=e.message;}
+}
+async function saveLocation(data) {
+  const r=await fetch(`/api/sources/${encodeURIComponent($('source').value)}/location`,{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'location'},body:JSON.stringify(data)});
+  if (!r.ok) throw new Error(`Location save failed (${r.status})`);
+  const loc=await r.json();const source=sources.find(s=>s.id===$('source').value);source.location=loc.label||null;
+  $('camera-location').textContent=loc.label||(loc.latitude==null?'Location unassigned':`${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}`);
+  await loadLocation();
+}
+$('location-form').onsubmit=async e=>{e.preventDefault();try {await saveLocation({method:'manual',label:$('location-label').value.trim(),latitude:$('location-lat').value===''?null:Number($('location-lat').value),longitude:$('location-lon').value===''?null:Number($('location-lon').value),accuracy_m:null});} catch(e) {$('location-status').textContent=e.message;}};
+$('disable-location').onclick=async()=>{try {await saveLocation({method:'disabled',label:'',latitude:null,longitude:null,accuracy_m:null});} catch(e) {$('location-status').textContent=e.message;}};
+$('browser-location').onclick=()=>{
+  $('location-status').textContent='Requesting browser location…';
+  if (!navigator.geolocation) {$('location-status').textContent='Browser location unavailable';return;}
+  navigator.geolocation.getCurrentPosition(async position=>{try {await saveLocation({method:'browser',label:$('location-label').value.trim(),latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy});} catch(e) {$('location-status').textContent=e.message;}},error=>{$('location-status').textContent=error.message;},{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+};

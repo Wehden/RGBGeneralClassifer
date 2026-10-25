@@ -79,6 +79,7 @@ preserve column types, nullable values, UTC timestamps and join IDs. Tables:
 | model_attempts | Started and terminal request records, joined by attempt_id |
 | settings | Threshold revisions and operator identity |
 | evaluations | Recorded reference labels and correctness outcomes |
+| location_updates | Opt-in location setting revisions, coordinates, method, accuracy and operator |
 | legacy_opinions | Previously retained scene descriptions and sampling outcomes |
 
 `manifest.json` records schemas, row counts, export time, settings and stream
@@ -107,3 +108,59 @@ request traces by `attempt_id`; pair started/terminal request rows using that
 same ID. `value_json` retains complete records alongside typed columns.
 Request failures, parsing failures, comparison disagreements and human-marked
 incorrect results are distinct values in these records.
+
+## Browse and query records
+
+The dashboard's **Records & downloads** bar links to `/records` and the complete
+Parquet/Arrow archive ZIPs. The records page filters detections by source,
+object label, material, location label, observed time and analysis status. It
+shows initial and enhanced scores, all material readings, status and links back
+to the observation. These queries do not hide scores below display thresholds.
+
+The JSON endpoint is `/api/review/records`. Parameters:
+
+| Parameter | Meaning |
+|---|---|
+| `source` | Exact source ID, for example `unoq` |
+| `label` | Case-insensitive substring of initial or enhanced object label |
+| `material` | Case-insensitive substring of a recorded material label |
+| `location` | Case-insensitive substring of the captured location label |
+| `from`, `to` | Inclusive observation timestamps in ISO8601 with timezone |
+| `status` | Analysis status such as `complete`, `partial`, `failed` or `queued` |
+| `limit` | 1-200 detections per page; default50 |
+| `before` | Opaque continuation value returned as `next_cursor` |
+| `format` | `json` (default), `parquet` or `arrow` |
+
+For example, in a signed-in browser:
+
+```text
+/api/review/records?source=unoq&material=plastic&limit=50
+/api/review/records?label=monitor&from=2026-10-25T00:00:00Z&format=parquet
+```
+
+The page provides **Copy request URL**, a **JSON request** link, per-page
+Parquet/Arrow downloads and **Next page**. JSON returns records, `next_cursor`,
+query time and current display settings. Typed downloads contain one page;
+`X-RGB-Next-Cursor` carries its continuation value. Scans examine at most500
+observations per request and can return a continuation even with no matches.
+Complete archive ZIP links continue to export every table at recorded stream
+watermarks. All routes use the existing LaminarAuth-protected origin. The
+browser's authenticated session applies to its requests and downloads.
+
+## Opt-in camera location
+
+**Camera location · opt in** provides a manual label and optional coordinates.
+**Assign this browser's location to camera** explicitly requests browser
+geolocation and then assigns that result to the selected source. It records
+latitude, longitude, reported accuracy, method, UTC time, operator and revision.
+It does not locate the camera independently. No geolocation request runs on
+page load. **Open location in Google Maps** is a link opened only by the user;
+there is no automatic Maps request or reverse-geocoding call.
+
+**Disable location recording** removes location from future observations.
+Existing observations retain their captured location revision. Settings changes
+append to `location_updates`, included in complete archive exports. Observation
+rows include location method/revision, coordinates and accuracy where captured.
+The source-location GET/POST endpoint is `/api/sources/<source_id>/location`.
+Writes require the authenticated origin and the `X-RGB-Request: location`
+header. Board-supplied location claims remain overridden by source settings.

@@ -1,5 +1,6 @@
 import hmac
 import json
+import math
 import os
 import re
 import threading
@@ -49,16 +50,64 @@ def create_app(store, sources=None, ingest_token=None):
     def dashboard():
         return render_template('index.html')
 
+    @app.get('/records')
+    def records_page():
+        return render_template('records.html')
+
+    @app.get('/api/review/records')
+    def records_query():
+        from rgb.records import query,download
+        format=request.args.get('format','json')
+        if format not in {'json','parquet','arrow'}:return jsonify(error='Expected json, parquet or arrow'),400
+        try:result=query(store,request.args)
+        except (TypeError,ValueError):return jsonify(error='Invalid records query; use source, from/to with timezone, label, material, status, limit 1-200, and before cursor'),400
+        if format=='json':return jsonify(result)
+        response=send_file(download(result['records'],format),mimetype='application/octet-stream',as_attachment=True,download_name='rgb-records-page.'+format)
+        if result['next_cursor']:response.headers['X-RGB-Next-Cursor']=result['next_cursor']
+        return response
+
     @app.get('/api/sources')
     def source_list():
-        return jsonify([{'id':key, 'label':s.get('label',key), 'location':s.get('location') or None} for key,s in sources.items()])
+        result=[]
+        for key,s in sources.items():
+            loc=store.location(key)
+            label=loc['label'] if loc else s.get('location')
+            if loc and not label and loc.get('latitude') is not None:label=f"{loc['latitude']:.5f}, {loc['longitude']:.5f}"
+            result.append({'id':key,'label':s.get('label',key),'location':label or None,'location_method':loc['method'] if loc else 'configured' if label else 'disabled'})
+        return jsonify(result)
+
+    @app.get('/api/sources/<source_id>/location')
+    def source_location(source_id):
+        if source_id not in sources:return 'Not found',404
+        return jsonify(store.location(source_id) or {'source_id':source_id,'method':'manual' if sources[source_id].get('location') else 'disabled','label':sources[source_id].get('location') or None,'latitude':None,'longitude':None,'accuracy_m':None,'version':0})
+
+    @app.post('/api/sources/<source_id>/location')
+    def change_location(source_id):
+        if source_id not in sources:return 'Not found',404
+        if not request.is_json or request.headers.get('X-RGB-Request')!='location':return jsonify(error='Expected location request'),400
+        if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc!=request.host:return jsonify(error='Origin mismatch'),403
+        data=request.get_json(silent=True)
+        if not isinstance(data,dict) or set(data)!={'method','label','latitude','longitude','accuracy_m'}:return jsonify(error='Invalid location'),400
+        if data['method'] not in ['manual','browser','disabled'] or not isinstance(data['label'],str) or len(data['label'])>120:return jsonify(error='Invalid location method or label'),400
+        lat,lon,accuracy=data['latitude'],data['longitude'],data['accuracy_m']
+        def number(n,lo,hi):return type(n) in (int,float) and math.isfinite(n) and lo<=n<=hi
+        if (lat is None)!=(lon is None) or lat is not None and not(number(lat,-90,90) and number(lon,-180,180)):return jsonify(error='Invalid coordinates'),400
+        if accuracy is not None and not number(accuracy,0,1e7):return jsonify(error='Invalid accuracy'),400
+        if data['method']=='browser' and lat is None:return jsonify(error='Browser location requires coordinates'),400
+        if data['method']=='disabled':data.update(label='',latitude=None,longitude=None,accuracy_m=None)
+        return jsonify(store.update_location(source_id,data,request.headers.get('X-Laminarauth-Identity')))
 
     @app.post('/api/ingest')
     def ingest():
         if not hmac.compare_digest(request.headers.get('Authorization',''), 'Bearer '+token):
             return jsonify(error='Unauthorized'), 401
         try:
-            event, image = validate_event(request.get_json(silent=True), sources)
+            data=request.get_json(silent=True)
+            configured=dict(sources)
+            if isinstance(data,dict) and isinstance(data.get('source_id'),str) and data['source_id'] in sources:
+                key=data['source_id']; location=store.location(key)
+                if location:configured[key]={**sources[key],'location':location['label'] or None,'location_record':location}
+            event, image = validate_event(data, configured)
         except InvalidEvent:
             return jsonify(error='Invalid observation'), 400
         row_id, created = store.save(event, image)

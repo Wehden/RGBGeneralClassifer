@@ -9,7 +9,8 @@ Each detection retains its initial classifier result and subsequent VLM readings
 Object and Material display modes select the latest accepted value for the live
 view and archive. Confidence
 thresholds, request traces, evaluation records and typed review exports are
-available in the dashboard. See [review data](docs/review-data.md).
+available in the dashboard. The Records page provides filters, request URLs,
+and page downloads; per-camera location recording is opt in. See [review data](docs/review-data.md).
 
 ## Components
 

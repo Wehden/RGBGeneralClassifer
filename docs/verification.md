@@ -213,3 +213,19 @@ Verified 2026-10-24 evening, America/Los_Angeles:
 - The user's subsequent classifier0.39 change saved as revision7 and was read
   back from the Uno Q. Object mode remained selected. CI passed for the code
   commit containing material mode and continuous-track matching.
+
+## Records access and opt-in location
+
+- 47 tests passed. Added material/object/source/time/location query filters,
+  cursor pagination without duplicated detections, typed page downloads,
+  location-input validation, ingest-role isolation, location audit and
+  preservation of historical location snapshots when settings change.
+- Complete archive exports now use schema4 and include `location_updates` as
+  a ninth table. Observations include captured location method/revision,
+  coordinates and accuracy when present.
+- Service image:
+  `localhost:30500/rgb-classifier@sha256:23351e0f6db3d2998ea8ab9abe56135f363b74789abc8398639a24e2f7afc305`.
+- Location permission is requested only by the explicit browser-location
+  button. No real browser location or Google Maps request was issued during
+  automated acceptance; manual/browser coordinate persistence was tested with
+  isolated fixture data. Existing Uno Q location remains unassigned.

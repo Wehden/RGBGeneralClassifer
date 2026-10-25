@@ -48,5 +48,5 @@ def validate_event(data, sources):
             image.verify()
         event = {'event_id':event_id, 'observed_at':observed.astimezone(timezone.utc).isoformat(), 'received_at':datetime.now(timezone.utc).isoformat(), 'source_id':source_id, 'location':source.get('location') or None, 'location_kind':'configured' if source.get('location') else 'unknown', 'detector':{'model':detector['model'], 'sha256':detector['sha256']}, 'detections':normalized, 'opinions':[], 'sorting_status':'unassessed'}
         return event, raw
-    except (KeyError, TypeError, ValueError, OverflowError, AttributeError, binascii.Error, OSError) as exc:
+    except (KeyError, TypeError, ValueError, OverflowError, AttributeError, binascii.Error, OSError, Image.DecompressionBombError) as exc:
         raise InvalidEvent('Invalid observation') from exc

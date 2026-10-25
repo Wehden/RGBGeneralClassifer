@@ -6,10 +6,12 @@ repository history. No merge is implied by deployment.
 
 ## Software and archive
 
-- Initial service unit/integration tests: 13 passed. Includes input validation,
+- Final service unit/integration tests: 16 passed. Includes input validation,
   configured-location authority, authentication, stable-UUID deduplication,
   pagination, image retrieval, separate opinions, ingest-role isolation, and
-  Redis-outage startup recovery in the VLM worker.
+  Redis-outage startup recovery in the VLM worker. Later regressions cover
+  conflicting UUID retries, closing unconsumed streams, and JPEG decompression
+  bombs returning validation errors.
 - Service images built and pushed, then deployed by immutable registry digest.
 - Real X8 camera observations reached Redis Streams with UUID, UTC timestamps,
   source ID, `Home desk` configured location, model hash, boxes, and images.
@@ -71,19 +73,56 @@ repository history. No merge is implied by deployment.
 - Public Cloudflare DNS/tunnel/access state read back after writes. Root returns
   an Access302; request form returns200. Direct unsigned origin returns403.
   All path checks include the live/history/image protected root.
-- LAN router cached the hostname's earlier NXDOMAIN until about20:36 PDT.
-  Public resolver and direct TLS edge checks already resolve/route correctly.
-  Browser sign-in acceptance remains separate from these request checks.
+- LAN router initially cached the hostname's earlier NXDOMAIN. A scoped SIGHUP
+  cache clear on its verified dnsmasq processes resolved the issue without
+  restarting the router or changing configuration. Public and LAN DNS now agree.
+  An existing owner Google session completed sign-in through the real public
+  hostname; live overlays, archive images, and a separate Qwen opinion were
+  visually verified in Chrome. No authentication bypass or forced-host mapping
+  was used for that browser acceptance.
 - LaminarAuth implementation suite1253 passed/37 skipped; separate reviewer
   independently ran460 passed/19 skipped and reported no actionable findings.
   PR36 CI jobs passed. Source and infrastructure receipts are retained privately
   outside this repository; no credentials or validation emails were published.
-- Live Google allowed-user, denied-user, wrong-valid-audience acceptance and
-  request/approval/welcome round trip have not yet been exercised. Rollback
+- Live denied-user, wrong-valid-audience acceptance and request/approval/welcome
+  round trip have not been exercised. Owner Google access and unsigned denial
+  were verified. Rollback
   instructions exist; an auth edge rollback rehearsal has not been performed.
 
-## Remaining release checks
+## Uno Q primary deployment
 
-Uno Q model/camera/temperature checks, final service CI, and authenticated
-browser acceptance are recorded below as they complete. Neither an access
-redirect nor a Kubernetes Ready condition establishes those outcomes.
+- User explicitly approved replacing its live bird classifier. Stopped bird
+  App Lab containers, image, and private app configuration remain available.
+  Historical bird archive was unchanged; live viewer admission was disabled
+  and the retained source mapping now points to a closed loopback port.
+- Built natively on the Uno Q from board source. Image ID:
+  `sha256:d3074366dc2a7c9064b76158b2197b9a220a09f8577867fc738461fad6f65d86`.
+- App Lab started the new custom brick and read back
+  `RGBGeneralClassifier (/home/arduino/ArduinoApps/rgbclassifier)` as default.
+  Both app containers are healthy. Non-capture Venus nodes were skipped and
+  USB capture selected `/dev/video2`.
+- Blank-frame inference164.5ms with no detections. Live inference approximately
+  160–165ms with actual TV/chair boxes, at the configured2FPS ceiling and two
+  inference threads. Observed container memory102MiB and CPU67%. After several
+  minutes thermal sensors were38–47.5°C, with unchanged boot ID. This is a
+  short operational observation, not a long-duration thermal qualification.
+- New source `unoq` observations and images reached Redis, with sampled Qwen
+  opinions. Earlier `portentauno` observations remain. Location is unknown,
+  deliberately avoiding an unconfirmed desk location for the replacement camera.
+- Persistent outbox pending count0. The app's saved default was verified;
+  a power-cycle/autostart drill for the new Uno Q application was not performed.
+- Final public desktop browser acceptance includes live bounding boxes,
+  observation selection, archived image/boxes, detector confidence and separate
+  VLM opinion. A private screenshot is kept outside the public repository.
+
+## Deployed service identity
+
+- Service image: `localhost:30500/rgb-classifier@sha256:230fb9b67a878b2e80fce4ac7da6e066e99234583de623ee505642cec335961c`.
+- Redis image: `redis:7.4.6-alpine@sha256:3b73847e72874be07e6657b129a94761662b79bc0f679273757d4218573b2a98`.
+- Primary source:192.168.1.127, `unoq`. Ingest NodePort:pragmatic32081, restricted
+  by network policy to that source. Redis and the web service remain private
+  ClusterIP services. Source location is currently unknown.
+- App PR:https://github.com/Wehden/RGBGeneralClassifer/pull/1.
+- Auth PR:https://github.com/Wehden/LaminarAuth/pull/36.
+- Both PRs remain unmerged. Final CI outcome is reported in their check runs.
+

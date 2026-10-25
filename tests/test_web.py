@@ -63,3 +63,30 @@ def test_ingest_role_cannot_expose_history_images_or_live(client,event,monkeypat
         assert c.get(path).status_code == 404
     assert c.get('/healthz').status_code == 200
     assert c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40}).status_code == 201
+
+
+def test_duplicate_uuid_cannot_replace_original_evidence(client,event):
+    c,store=client
+    headers={'Authorization':'Bearer '+'x'*40}
+    c.post('/api/ingest',json=event,headers=headers)
+    original=store.get(event['event_id'])
+    event['detections'][0]['label']='different claim'
+    replay=c.post('/api/ingest',json=event,headers=headers)
+    assert replay.status_code == 200
+    assert replay.json['created'] is False
+    assert store.get(event['event_id'])['detections'] == original['detections']
+
+
+def test_unconsumed_stream_response_releases_admission(client,monkeypatch):
+    from unittest.mock import Mock
+    c,_=client
+    upstream=Mock()
+    upstream.iter_content.return_value=iter([b'frame'])
+    monkeypatch.setattr('rgb.web.requests.get',lambda *a,**k:upstream)
+    # WSGI may close a response before iterating it. Every admission must return.
+    for _ in range(8):
+        with c.application.test_request_context('/api/live/portentauno/stream'):
+            response=c.application.view_functions['stream']('portentauno')
+            assert response.status_code == 200
+            response.close()
+    assert upstream.close.call_count == 8

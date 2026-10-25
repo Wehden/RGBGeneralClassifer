@@ -34,3 +34,13 @@ def test_invalid_observations(event,sources,patch):
     event.update(patch)
     with pytest.raises(InvalidEvent):
         validate_event(event,sources)
+
+
+def test_rejects_decompression_bomb_as_invalid_event(event,sources):
+    # Mutate JPEG SOF dimensions without constructing or allocating a huge image.
+    data=bytearray(base64.b64decode(event['image_b64']))
+    marker=data.index(b'\xff\xc0')
+    data[marker+5:marker+9]=b'\xff\xff\xff\xff'
+    event['image_b64']=base64.b64encode(data).decode()
+    with pytest.raises(InvalidEvent):
+        validate_event(event,sources)

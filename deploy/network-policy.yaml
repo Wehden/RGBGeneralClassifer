@@ -1,0 +1,80 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: rgb-classifier
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns
+  namespace: rgb-classifier
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-private
+  namespace: rgb-classifier
+spec:
+  podSelector: {matchLabels: {app: rgb-redis}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: rgb-web}}
+        - podSelector: {matchLabels: {app: rgb-ingest}}
+      ports: [{port: 6379, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-to-redis
+  namespace: rgb-classifier
+spec:
+  podSelector:
+    matchExpressions: [{key: app, operator: In, values: [rgb-web, rgb-ingest]}]
+  policyTypes: [Egress]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: rgb-redis}}}]
+      ports: [{port: 6379, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: protected-web
+  namespace: rgb-classifier
+spec:
+  podSelector: {matchLabels: {app: rgb-web}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: traefik}}
+      ports: [{port: 8080, protocol: TCP}]
+  egress:
+    - to: [{ipBlock: {cidr: 192.168.1.127/32}}]
+      ports: [{port: 8080, protocol: TCP}]
+    - to: [{ipBlock: {cidr: 192.168.1.198/32}}]
+      ports: [{port: 11434, protocol: TCP}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: board-ingest
+  namespace: rgb-classifier
+spec:
+  podSelector: {matchLabels: {app: rgb-ingest}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ipBlock: {cidr: 192.168.1.127/32}}]
+      ports: [{port: 8080, protocol: TCP}]

@@ -1,0 +1,31 @@
+# Shared across k3s nodes; standpunkt remains a single storage server.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: rgb-classifier-data
+spec:
+  capacity:
+    storage: 25Gi
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.2, hard]
+  nfs:
+    server: 192.168.1.186
+    path: /home/rgb-classifier
+  claimRef:
+    namespace: rgb-classifier
+    name: rgb-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rgb-data
+  namespace: rgb-classifier
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: rgb-classifier-data
+  resources:
+    requests:
+      storage: 25Gi

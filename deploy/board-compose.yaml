@@ -1,0 +1,14 @@
+services:
+  detector:
+    image: ${BOARD_IMAGE:?Set the tested native ARM64 image}
+    container_name: rgb-classifier-x8
+    restart: unless-stopped
+    user: '1000:1000'
+    group_add: ['44']
+    devices: ['/dev/video1:/dev/video1', '/dev/video2:/dev/video2', '/dev/video3:/dev/video3', '/dev/video4:/dev/video4']
+    ports: ['8080:8080']
+    env_file: /home/fio/rgb-classifier/runtime.env
+    volumes: ['/home/fio/rgb-classifier/data:/data']
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '2'}

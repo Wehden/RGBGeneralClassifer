@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# RGB runtime state and credentials
+runtime.env
+*.sqlite3
+*.sqlite3-journal
+*.rdb
+*.aof

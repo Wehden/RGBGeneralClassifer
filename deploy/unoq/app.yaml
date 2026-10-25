@@ -1,0 +1,5 @@
+name: RGBGeneralClassifier
+icon: 📦
+description: General object observations with live bounding boxes and a protected event archive.
+bricks:
+  - rgbclassifier

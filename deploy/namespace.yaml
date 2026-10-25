@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rgb-classifier
+  labels:
+    app.kubernetes.io/part-of: rgb-classifier

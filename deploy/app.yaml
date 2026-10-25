@@ -1,0 +1,171 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rgb-config
+  namespace: rgb-classifier
+data:
+  SOURCES_JSON: '{"unoq":{"url":"http://192.168.1.127:8080","label":"Arduino Uno Q","location":""}}'
+  VLM_ENDPOINTS_JSON: '[{"url":"http://192.168.1.198:11434","model":"qwen3.5:27b-q4_K_M"}]'
+  IMAGE_DIR: /data/images
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rgb-redis
+  namespace: rgb-classifier
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: rgb-redis}
+  template:
+    metadata:
+      labels: {app: rgb-redis}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: redis
+          image: redis:7.4.6-alpine@sha256:3b73847e72874be07e6657b129a94761662b79bc0f679273757d4218573b2a98
+          command: [redis-server]
+          args: [--appendonly, 'yes', --appendfsync, everysec, --dir, /data, --requirepass, '$(REDIS_PASSWORD)', --save, '300 1', --maxmemory, 512mb, --maxmemory-policy, noeviction]
+          envFrom:
+            - secretRef: {name: rgb-runtime}
+          ports: [{containerPort: 6379, name: redis}]
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: '1', memory: 768Mi}
+          readinessProbe: {tcpSocket: {port: redis}, initialDelaySeconds: 3}
+          volumeMounts:
+            - {name: data, mountPath: /data, subPath: redis}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: rgb-data}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rgb-redis
+  namespace: rgb-classifier
+spec:
+  selector: {app: rgb-redis}
+  ports: [{port: 6379, targetPort: redis}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rgb-web
+  namespace: rgb-classifier
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: rgb-web}
+  template:
+    metadata:
+      labels: {app: rgb-web}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/arch: amd64}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: web
+          image: RGB_IMAGE
+          envFrom:
+            - configMapRef: {name: rgb-config}
+            - secretRef: {name: rgb-runtime}
+          ports: [{containerPort: 8080, name: web}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '2', memory: 512Mi}
+          readinessProbe: {httpGet: {path: /healthz, port: web}, initialDelaySeconds: 3}
+          livenessProbe: {httpGet: {path: /healthz, port: web}, initialDelaySeconds: 30, periodSeconds: 20, failureThreshold: 6}
+          volumeMounts:
+            - {name: data, mountPath: /data/images, subPath: images}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: rgb-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 32Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rgb-web
+  namespace: rgb-classifier
+spec:
+  selector: {app: rgb-web}
+  ports: [{port: 80, targetPort: web, name: web}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rgb-ingest
+  namespace: rgb-classifier
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: rgb-ingest}
+  template:
+    metadata:
+      labels: {app: rgb-ingest}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: pragmatic}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
+      containers:
+        - name: ingest
+          image: RGB_IMAGE
+          env: [{name: ROLE, value: ingest}]
+          envFrom:
+            - configMapRef: {name: rgb-config}
+            - secretRef: {name: rgb-runtime}
+          ports: [{containerPort: 8080, name: web}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: '1', memory: 256Mi}
+          readinessProbe: {httpGet: {path: /healthz, port: web}, initialDelaySeconds: 3}
+          volumeMounts:
+            - {name: data, mountPath: /data/images, subPath: images}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: rgb-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 32Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rgb-ingest
+  namespace: rgb-classifier
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: {app: rgb-ingest}
+  ports: [{port: 80, targetPort: web, nodePort: 32081, name: ingest}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rgb-protected
+  namespace: rgb-classifier
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: laminarauth-laminarauth-strip-identity@kubernetescrd,laminarauth-laminarauth-forwardauth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: rgb.wehden.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: rgb-web, port: {name: web}}

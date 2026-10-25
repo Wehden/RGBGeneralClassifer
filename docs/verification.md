@@ -125,4 +125,3 @@ repository history. No merge is implied by deployment.
 - App PR:https://github.com/Wehden/RGBGeneralClassifer/pull/1.
 - Auth PR:https://github.com/Wehden/LaminarAuth/pull/36.
 - Both PRs remain unmerged. Final CI outcome is reported in their check runs.
-

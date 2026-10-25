@@ -34,7 +34,16 @@ def validate_event(data, sources):
                 raise ValueError('Invalid detection')
             if len(box) != 4 or not all(isinstance(x, (float, int)) and math.isfinite(x) and 0 <= x <= 1 for x in box) or box[0] >= box[2] or box[1] >= box[3]:
                 raise ValueError('Invalid box')
-            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id'])})
+            live = d.get('live_value')
+            if live is not None:
+                if not isinstance(live,dict) or not isinstance(live['label'],str) or not 1<=len(live['label'])<=120:
+                    raise ValueError('Invalid live label')
+                UUID(live['detection_id']);UUID(live['reference_event_id'])
+                for key,lo,hi in [('confidence',0,1),('match_iou',0,1),('match_hash_distance',0,64),('match_age_s',0,90)]:
+                    if type(live[key]) not in (int,float) or not lo<=live[key]<=hi:
+                        raise ValueError('Invalid live match')
+                if not isinstance(live['model'],str) or len(live['model'])>120:raise ValueError('Invalid live model')
+            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id']),**({'live_value':live} if live is not None else {})})
         detector = data['detector']
         if not isinstance(detector['model'], str) or len(detector['model']) > 120 or not re.fullmatch('[a-f0-9]{64}', detector['sha256']):
             raise ValueError('Invalid model provenance')
@@ -46,7 +55,12 @@ def validate_event(data, sources):
             if image.format != 'JPEG' or image.width*image.height > 2_000_000:
                 raise ValueError('Expected bounded JPEG')
             image.verify()
-        event = {'event_id':event_id, 'observed_at':observed.astimezone(timezone.utc).isoformat(), 'received_at':datetime.now(timezone.utc).isoformat(), 'source_id':source_id, 'location':source.get('location') or None, 'location_kind':'configured' if source.get('location') else 'unknown', 'detector':{'model':detector['model'], 'sha256':detector['sha256']}, 'detections':normalized, 'opinions':[], 'sorting_status':'unassessed'}
+        provenance = {'model':detector['model'], 'sha256':detector['sha256']}
+        if 'threshold' in detector:
+            if type(detector['threshold']) not in (int,float) or not .05<=detector['threshold']<=.99:
+                raise ValueError('Invalid detector threshold')
+            provenance.update(threshold=detector['threshold'],settings_version=int(detector.get('settings_version',0)))
+        event = {'event_id':event_id, 'observed_at':observed.astimezone(timezone.utc).isoformat(), 'received_at':datetime.now(timezone.utc).isoformat(), 'source_id':source_id, 'location':source.get('location') or None, 'location_kind':'configured' if source.get('location') else 'unknown', 'detector':provenance, 'detections':normalized, 'opinions':[]}
         return event, raw
     except (KeyError, TypeError, ValueError, OverflowError, AttributeError, binascii.Error, OSError, Image.DecompressionBombError) as exc:
         raise InvalidEvent('Invalid observation') from exc

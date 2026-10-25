@@ -3,3 +3,5 @@ requests==2.34.2
 redis==6.4.0
 waitress==3.0.2
 Pillow==12.3.0
+
+pyarrow==26.0.0

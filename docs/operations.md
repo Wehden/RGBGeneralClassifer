@@ -106,12 +106,14 @@ No automatic event expiry occurs; monitor Redis `used_memory`, NFS free space,
 and board outbox usage. The NFS PV is Retain and shared across nodes, with a
 single standpunkt server. Its 25 Gi capacity declaration is not a quota.
 
-VLM configuration accepts a JSON list of endpoint/model pairs. The deployed
-home endpoint is eisbox at port11434 with `qwen3.5:27b-q4_K_M`, confirmed to
-support vision. Samples are limited to once per minute; older-than-five-minute
-observations are explicitly skipped. Skipped and failed opinions remain
-visible. Truncated responses are labeled when the model reports an output
-limit. An empty endpoint list disables enrichment. Restart web after changes.
+VLM configuration accepts a JSON list of endpoint/model pairs. The home
+endpoint is eisbox at port11434 with `qwen3.5:27b-q4_K_M`. Every archived box
+receives a model reading and comparison, in batches of up to four crops plus
+scene context. Threshold controls are in the dashboard; revisions are audited
+and the board retrieves them every three seconds. Review downloads provide
+Parquet or Arrow IPC tables. See [review data](review-data.md) for schemas,
+request/evaluation provenance and the live-label matching rule. An empty model
+endpoint list disables automatic analysis.
 
 ## Backups and restoration
 

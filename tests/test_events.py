@@ -24,7 +24,6 @@ def test_configured_location_overrides_board_claim(event,sources):
     result, image = validate_event(event,sources)
     assert result['location'] == 'Teaching bench'
     assert result['location_kind'] == 'configured'
-    assert result['sorting_status'] == 'unassessed'
     assert result['opinions'] == []
     assert image.startswith(b'\xff\xd8')
 

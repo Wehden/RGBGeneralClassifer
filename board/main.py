@@ -16,6 +16,8 @@ import requests
 from flask import Flask, Response, jsonify
 from waitress import serve
 from board.detector import Detector, overlay
+from board.refinements import match
+from common.geometry import bounds, fingerprint
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('rgb.board')
@@ -31,6 +33,7 @@ if not 0.1 <= MAX_FPS <= 30:
 cv2.setNumThreads(1)
 MODEL = 'efficientdet-lite0-coco-uint8'
 MODEL_SHA = hashlib.sha256(open('/app/models/efficientdet-lite0.tflite', 'rb').read()).hexdigest()
+policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'version': 0}, 'refinements': None}
 DB = os.getenv('OUTBOX_DB', '/data/outbox.sqlite3')
 
 
@@ -66,7 +69,17 @@ def capture():
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError('Camera read failed')
+            current_policy = policy
+            detector.threshold = current_policy['settings']['detector_threshold']
             detections, ms = detector.detect(frame)
+            for d in detections:
+                if current_policy['refinements']:
+                    x1,y1,x2,y2 = bounds(d['box'],frame.shape[1],frame.shape[0])
+                    crop = frame[y1:y2,x1:x2]
+                    digest = fingerprint(lambda x,y: crop[y,x][::-1],crop.shape[1],crop.shape[0])
+                    reading = match(d,digest,current_policy['refinements'],time.time(),current_policy['settings']['vlm_threshold'])
+                    if reading:
+                        d.update(display_label=reading['label'],display_confidence=reading['confidence'],detection_id=reading['detection_id'],label_provider='vlm',live_value={key:reading[key] for key in ['label','confidence','detection_id','reference_event_id','model','match_iou','match_hash_distance','match_age_s']})
             ok, jpeg = cv2.imencode('.jpg', overlay(frame, detections), [cv2.IMWRITE_JPEG_QUALITY, 80])
             if not ok:
                 raise RuntimeError('JPEG encoding failed')
@@ -78,7 +91,7 @@ def capture():
             if detections and now-last_event >= 15:
                 raw_ok, raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if raw_ok:
-                    event = {'event_id': str(uuid.uuid4()), 'observed_at': datetime.now(timezone.utc).isoformat(), 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': MODEL, 'sha256': MODEL_SHA}, 'detections': detections, 'image_b64': base64.b64encode(raw).decode()}
+                    event = {'event_id': str(uuid.uuid4()), 'observed_at': datetime.now(timezone.utc).isoformat(), 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': MODEL, 'sha256': MODEL_SHA, 'threshold': detector.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'image_b64': base64.b64encode(raw).decode()}
                     with database() as conn:
                         size = conn.execute('SELECT COUNT(*) FROM outbox').fetchone()[0]
                         if size < 500:
@@ -94,6 +107,23 @@ def capture():
                 cap.release()
                 cap = None
             time.sleep(2)
+
+
+def poll_policy():
+    global policy
+    url = os.environ['ARCHIVE_URL'].rstrip('/')+'/api/board-policy/'+SOURCE
+    while True:
+        try:
+            response = requests.get(url,headers={'Authorization':'Bearer '+os.environ['INGEST_TOKEN']},timeout=5)
+            response.raise_for_status()
+            received = response.json()
+            for key in ['detector_threshold','vlm_threshold']:
+                if not .05 <= float(received['settings'][key]) <= .99:
+                    raise ValueError('Invalid threshold')
+            policy = received
+        except (requests.RequestException,KeyError,TypeError,ValueError):
+            pass
+        time.sleep(3)
 
 
 def deliver():
@@ -120,7 +150,7 @@ def deliver():
 def health():
     with condition:
         result = {k:v for k,v in state.items() if k != 'jpeg'}
-    result.update(source_id=SOURCE, model=MODEL, model_sha256=MODEL_SHA)
+    result.update(source_id=SOURCE, model=MODEL, model_sha256=MODEL_SHA, settings=policy['settings'])
     return jsonify(result), 200 if time.time()-result['last_frame'] < 15 else 503
 
 
@@ -155,4 +185,5 @@ if __name__ == '__main__':
     database().close()
     threading.Thread(target=capture, daemon=True).start()
     threading.Thread(target=deliver, daemon=True).start()
+    threading.Thread(target=poll_policy, daemon=True).start()
     serve(app, host='0.0.0.0', port=8080, threads=10, channel_timeout=20)

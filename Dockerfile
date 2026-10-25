@@ -3,5 +3,6 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 WORKDIR /app
 COPY rgb /app/rgb
+COPY common /app/common
 USER 1000:1000
 CMD ["python", "-m", "rgb.main"]

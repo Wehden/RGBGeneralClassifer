@@ -1,13 +1,14 @@
 # RGBGeneralClassifier
 
-An Arduino Uno Q object-observation demo for trash-sorting discussions with Seattle
+An Arduino Uno Q object-observation and evaluation system for work with Seattle
 University students. The Portenta X8 prototype is retained for cooling experiments. The board detects COCO objects and draws live bounding
 boxes. A k3s service archives observations in Redis Streams and serves a camera,
 history list, and detail pane at https://rgb.wehden.com through LaminarAuth.
 
-Object classes are not material or recycling determinations. The dashboard keeps
-camera detections, optional VLM opinions, and the unassessed sorting decision
-separate. Images and configured source locations are visible to approved users.
+Each detection retains its initial classifier result and subsequent VLM readings.
+The live view and archive display the latest accepted value. Confidence
+thresholds, request traces, evaluation records and typed review exports are
+available in the dashboard. See [review data](docs/review-data.md).
 
 ## Components
 

@@ -5,5 +5,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 WORKDIR /app
 COPY board /app/board
 COPY models /app/models
+COPY common /app/common
 USER 1000:1000
 CMD ["python", "-m", "board.main"]

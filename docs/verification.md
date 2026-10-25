@@ -4,9 +4,9 @@ Date: 2026-10-24, America/Los_Angeles. Initial deployment was built from the
 `codex/trash-sorting-demo` work. Final PR and source commit are available in the
 repository history. No merge is implied by deployment.
 
-## Software and archive
+## Initial release: software and archive
 
-- Final service unit/integration tests: 16 passed. Includes input validation,
+- Initial service unit/integration tests: 16 passed. Includes input validation,
   configured-location authority, authentication, stable-UUID deduplication,
   pagination, image retrieval, separate opinions, ingest-role isolation, and
   Redis-outage startup recovery in the VLM worker. Later regressions cover
@@ -53,7 +53,7 @@ repository history. No merge is implied by deployment.
 - Board defaults now bound LiteRT to2 threads and capture to2FPS, with
   configurable limits. This was implemented after the unrestricted experiment.
 
-## VLM
+## Initial release: scene-level VLM
 
 - Queried the live eisbox Ollama inventory: `qwen3.5:27b-q4_K_M` advertises
   vision capability. Real JPEGs were accepted by `/api/chat` and produced
@@ -62,8 +62,7 @@ repository history. No merge is implied by deployment.
   covered by an outage/retry regression test. Redis restart recovery was then
   exercised. Sampling skips/failures remain explicit. New responses carry
   output-limit metadata; older prototype responses predate this marker.
-- No quorum accuracy, material truth, recyclability, or sorting-bin correctness
-  is claimed. No trash-specific training or accuracy evaluation has occurred.
+- This release preceded per-box readings and the evaluation workflow below.
 
 ## Public authentication
 
@@ -125,3 +124,46 @@ repository history. No merge is implied by deployment.
 - App PR:https://github.com/Wehden/RGBGeneralClassifer/pull/1.
 - Auth PR:https://github.com/Wehden/LaminarAuth/pull/36.
 - Both PRs remain unmerged. Final CI outcome is reported in their check runs.
+
+## Per-detection event streams and review release
+
+Verified 2026-10-24 evening, America/Los_Angeles:
+
+- 36 service tests passed. Coverage includes immutable initial results,
+  idempotent enhancements, confidence-dependent projections, actual failure
+  response retention, crop coverage validation, live visual matching,
+  settings validation/audit, human evaluation records, terminal-job replay,
+  processing failures, and both export formats. Export tests cover concurrent
+  updates after the captured watermark and consecutive download slot release.
+- Qwen3.5 `qwen3.5:27b-q4_K_M` on eisbox received actual desk crops plus scene
+  context. Observation `cab1cc2f-43de-4771-a2d7-d5e2a40677a4` completed three
+  box readings in 8.65 seconds: `tv` became `computer monitor` with score0.95;
+  both keyboard readings returned `keyboard` with score0.98.
+- The public authenticated review of observation
+  `ecb85551-8663-49bc-b1e2-203ff59626e8` displayed four completed readings,
+  including `tv`0.6484 to `computer monitor`0.95. Its history showed the initial
+  result, started request, successful request taking11866.785ms, and appended
+  enhancement. Original labels and scores remained in the initial record.
+- Both public sliders were changed to0.46/0.66 and applied. Uno Q health read
+  back revision1 with those values. They were restored to0.45/0.65 in revision2.
+  Both revisions retained the authenticated operator and UTC timestamps.
+- Downloaded both bundles through the protected public dashboard and opened
+  every table with PyArrow. The Parquet snapshot at04:00:25 UTC contained179
+  observations,404 detections,146 legacy opinions,413 detection updates,
+  76 attempt records,2 setting revisions and0 evaluations. The Arrow snapshot
+  at04:00:31 UTC contained180 observations,409 detections,146 legacy opinions,
+  426 updates,78 attempt records,2 setting revisions and0 evaluations.
+  Both contained UTC timestamp columns, typed scores and stable join IDs.
+  Seven detections in each snapshot retained applied live matching values.
+- No evaluation labels were inserted into the operational dataset during
+  acceptance. Human evaluation persistence and exported values were exercised
+  with isolated test fixtures.
+- Native Uno Q image `rgb-classifier:unoq-20261024-v3` read back as
+  `sha256:26dab9aae02b3bbd3ad5be2b5367b9ee11def90416e62c02fa0a2c607a2a0aef`.
+  Camera capture was `/dev/video0`. A current health sample measured160.78ms
+  inference. A short runtime sample measured73.42% CPU,113.2MiB memory and44.6°C.
+  Health and archived observations contained enhanced live labels and their
+  reference detection IDs, IoU, crop hash distance and reading age.
+- Service release image:
+  `localhost:30500/rgb-classifier@sha256:81ff482d62d88424ec47563ad5e37022c194409c5152ff760aa2ca436108eef0`.
+  Web and ingest use the same digest; only the web role starts the VLM worker.

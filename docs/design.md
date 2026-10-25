@@ -36,7 +36,7 @@ service and operator approval. Students are not automatically granted access.
 
 An event contains a UUID, UTC observed/received times, source ID, configured
 location (or unknown), model name and SHA-256, detection list, image SHA-256,
-separate model opinions, and `sorting_status=unassessed`. Detection coordinates
+separate model opinions. Detection coordinates
 are normalized `[ymin,xmin,ymax,xmax]`. The server validates scores, boxes,
 source allowlisting, timestamps, model provenance shape and bounded JPEGs.
 The server takes location from source configuration, ignoring board claims.
@@ -59,21 +59,11 @@ NFS data can follow a pod to a different node, but standpunkt is a single storag
 server and Redis is one process. This deployment is not highly available.
 Shared filesystem storage alone is not replication or a tested backup.
 
-## VLM extension
+## Per-detection model updates and review
 
-Optional `VLM_ENDPOINTS_JSON` entries identify exact endpoint/model pairs. A
-single worker handles one event at a time and records separate responses,
-timestamps, or explicit failures; it never overwrites detector labels. The
-cursor and opinion list commit in one Redis transaction. Responses are treated
-as plain untrusted text in the browser. Image text has no authority over tools
-or infrastructure. VLMs receive no tools, credentials, or disposal decision
-permission. Multiple entries provide distinguishable opinions, not a calibrated
-quorum or verified consensus.
-
-The initial model is the live-verified Laminar Ollama Qwen3.5 27B model. Vision
-capability and inventory are checked before enabling it. An outage leaves live
-capture and event ingestion operational. The VLM worker samples at most once per sixty seconds (configurable via
-`VLM_MIN_INTERVAL`), skips observations older than five minutes, and records
-explicit skip reasons. It may lag the archive;
-it has one bounded request at a time per endpoint, with a ninety-second read
-timeout. Images stay within the configured cluster endpoint.
+See [review-data.md](review-data.md) for the current event-stream contract,
+per-box comparison requests, threshold policy, live matching, evaluations and
+Arrow/Parquet exports. Initial scene records remain unchanged. Each detection
+has a stable ID and append-only updates; the latest enhanced value supplies
+the display projection. The earlier scene-description sampling implementation
+is retained as legacy data and is no longer the active analysis path.

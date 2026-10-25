@@ -194,3 +194,12 @@ the fields as soon as they arrive and remain there if saving fails. A provider
 timeout reports that no coordinates arrived. Switching cameras before the
 callback cancels the assignment; a delayed response cannot populate another
 camera's fields.
+
+## Detector trial provenance
+
+Schema6 retains detector runtime, input, vocabulary and export configuration
+as `observations.detector_config_json`, plus `detections.initial_class_id`.
+Paged record downloads include the initial model/hash, configuration and class
+ID. These IDs refer to the recorded model vocabulary. The YOLOE manifest pins
+the full vocabulary; observations retain its hash instead of copying all4,585
+names. Historical EfficientDet observations remain unchanged.

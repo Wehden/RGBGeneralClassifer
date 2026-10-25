@@ -14,7 +14,7 @@ from rgb.events import InvalidEvent, validate_event
 from rgb.store import StaleEvaluation
 
 
-def create_app(store, sources=None, ingest_token=None):
+def create_app(store, sources=None, ingest_token=None, analysis_models=None):
     app = Flask(__name__)
     app.config['MAX_CONTENT_LENGTH'] = 2_000_000
     sources = sources if sources is not None else json.loads(os.environ['SOURCES_JSON'])
@@ -136,7 +136,7 @@ def create_app(store, sources=None, ingest_token=None):
     @app.get('/api/vlm/status')
     def vlm_status():
         active=store.redis.get('rgb:vlm:active')
-        return jsonify(paused=store.settings()['vlm_paused'],active=json.loads(active) if active else None,enabled=store.analysis_enabled)
+        return jsonify(paused=store.settings()['vlm_paused'],active=json.loads(active) if active else None,enabled=store.analysis_enabled,models=analysis_models or [])
 
     @app.get('/api/board-policy/<source_id>')
     def board_policy(source_id):

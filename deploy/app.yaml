@@ -5,7 +5,7 @@ metadata:
   namespace: rgb-classifier
 data:
   SOURCES_JSON: '{"unoq":{"url":"http://192.168.1.127:8080","label":"Arduino Uno Q","location":""}}'
-  VLM_ENDPOINTS_JSON: '[{"url":"http://192.168.1.198:11434","model":"qwen3.5:27b-q4_K_M"}]'
+  VLM_ENDPOINTS_JSON: '[{"url":"http://ollama-vlm-pool.ollama.svc.cluster.local:11434","model":"qwen3.5:9b-q4_K_M"}]'
   IMAGE_DIR: /data/images
 ---
 apiVersion: apps/v1

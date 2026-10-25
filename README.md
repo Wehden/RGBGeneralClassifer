@@ -1,7 +1,7 @@
 # RGBGeneralClassifier
 
 An Arduino Uno Q object-observation and evaluation system for work with Seattle
-University students. The Portenta X8 prototype is retained for cooling experiments. The board detects COCO objects and draws live bounding
+University students. The Portenta X8 prototype is retained for cooling experiments. The current trial uses YOLOE-26n prompt-free ONNX with 4,585 class names. The retained first version uses EfficientDet-Lite0 COCO. The board draws live bounding
 boxes. A k3s service archives observations in Redis Streams and serves a camera,
 history list, and detail pane at https://rgb.wehden.com through LaminarAuth.
 
@@ -16,7 +16,7 @@ See [review data](docs/review-data.md).
 
 ## Components
 
-- `board/`: one V4L2 camera owner, LiteRT CPU detector, shared MJPEG cache,
+- `board/`: one V4L2 camera owner, LiteRT or YOLOE ONNX CPU detector, shared MJPEG cache,
   persistent SQLite delivery outbox, recovery after camera read failures.
 - `rgb/`: Flask/Waitress web and ingest roles, Redis event archive, immutable
   content-addressed JPEGs, optional serialized Ollama second pass.
@@ -53,3 +53,6 @@ verifies the pinned model checksum and builds the service image. JUnit test
 results are retained as a workflow artifact for14 days. PR updates cancel an
 older running check for that PR. Deployment remains manual; the workflow does
 not push images or deploy to Kubernetes or the camera.
+
+The [YOLOE trial](docs/yoloe-trial.md) records the comparison, provenance,
+uncapped capture settings, rollback and 9B VLM pool integration.

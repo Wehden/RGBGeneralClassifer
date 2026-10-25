@@ -107,7 +107,9 @@ and board outbox usage. The NFS PV is Retain and shared across nodes, with a
 single standpunkt server. Its 25 Gi capacity declaration is not a quota.
 
 VLM configuration accepts a JSON list of endpoint/model pairs. The home
-endpoint is eisbox at port11434 with `qwen3.5:27b-q4_K_M`. Every archived box
+endpoint is `ollama-vlm-pool.ollama.svc.cluster.local:11434` with
+`qwen3.5:9b-q4_K_M`, using an 8K context. The previous 27B endpoint remains
+available to other consumers. Every archived box
 receives a model reading and comparison, in batches of up to four crops plus
 scene context. Threshold controls are in the dashboard; revisions are audited
 and the board retrieves them every three seconds. Review downloads provide

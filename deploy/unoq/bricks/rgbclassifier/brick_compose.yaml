@@ -1,7 +1,12 @@
 services:
   detector:
-    image: rgb-classifier:unoq-20261024-v7
+    image: rgb-classifier:unoq-yoloe26n-20261025-v2
     restart: unless-stopped
+    environment:
+      DETECTOR_BACKEND: yoloe
+      YOLOE_MODEL: /app/models/yoloe-26n-pf-320/model.onnx
+      YOLOE_MANIFEST: /app/models/yoloe-26n-pf-320/manifest.json
+      MAX_FPS: '0'
     user: '1000:1000'
     group_add: ['44']
     devices:

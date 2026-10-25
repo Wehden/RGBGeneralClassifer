@@ -141,7 +141,7 @@ Verified 2026-10-24 evening, America/Los_Angeles:
   both keyboard readings returned `keyboard` with score0.98.
 - The public authenticated review of observation
   `ecb85551-8663-49bc-b1e2-203ff59626e8` displayed four completed readings,
-  including `tv`0.6484 to `computer monitor`0.95. Its history showed the initial
+  including `tv`0.6484 to `computer monitor` 0.95. Its history showed the initial
   result, started request, successful request taking11866.785ms, and appended
   enhancement. Original labels and scores remained in the initial record.
 - Both public sliders were changed to0.46/0.66 and applied. Uno Q health read
@@ -176,7 +176,7 @@ Verified 2026-10-24 evening, America/Los_Angeles:
 Verified 2026-10-24 evening, America/Los_Angeles:
 
 - Investigated a monitor overlay that retained `tv` while Qwen had returned
-  `computer monitor`0.95. The boxes overlapped by0.9715, but the crop hash
+  `computer monitor` 0.95. The boxes overlapped by0.9715, but the crop hash
   distance was20 against the former limit4. The crop-content gate was removed
   in favor of continuous track association; hash distance remains recorded.
 - Uno Q health subsequently reported `label=tv`, `display_label=computer monitor`,
@@ -237,3 +237,40 @@ Verified 2026-10-24 evening, America/Los_Angeles:
   1870 detection updates,316 attempt records,8 settings revisions and0
   evaluations. All nine typed tables were readable. The location control
   showed disabled/revision0 without requesting browser location.
+
+## YOLOE-26n prompt-free trial and 9B pool
+
+- Deployed native Uno Q image `rgb-classifier:unoq-yoloe26n-20261025-v2`,
+  image ID `sha256:e2e455f23cc37a9589a44d87c8833155ac93cb55852af5713f9e8c474bfee873`.
+- Model is the official prompt-free YOLOE-26n checkpoint, exported to float32
+  ONNX at 320 px with 4,585 names, end-to-end selection, one class per proposal
+  and up to 100 outputs. The graph hash is
+  `8120cf9b3f3cf1dfbbc768b2eb869b48a18f6958f7272e1ba59258c1030ae806`.
+  The full label mapping and export/checkpoint hashes are in its manifest.
+- Capture is uncapped (`MAX_FPS=0`). Ten live health samples spanned 23 frames
+  over 19.112 s: 1.2034 FPS, with 805.13 ms median reported inference. Container
+  memory was 457.4 MiB, CPU 196.4% of one core, and board temperature 50.0 C.
+  The initial independent profile comparison is in `yoloe-trial.md`.
+- Live observation `74c84975-7920-4a84-b74a-4bd940c1bde8` recorded `office desk`,
+  `cup` and `computer chair`, with detector/vocabulary provenance. Public review
+  showed these initial YOLOE readings and their scores. No accuracy claim is
+  attached to these readings.
+- 66 Python tests and 7 browser behavior tests pass. Added letterboxing/channel
+  order, clipping, confidence/class validation, mask-column handling, pinned
+  graph/vocabulary, bounded configuration validation and typed provenance tests.
+- Both schema6 complete formats opened successfully at 690 observations,
+  including 6 YOLOE observations. Parquet and Arrow page downloads retained
+  detector model/hash, initial class ID and vocabulary hash. Older EfficientDet
+  observations remained available.
+- RGB's new target is the 9B pool, model `qwen3.5:9b-q4_K_M`, with 8K context.
+  A bounded image/crop driver probe returned HTTP 200 in 6,934.75 ms and a valid
+  object/material response. Model inventory reported the expected vision model.
+  The probe retained its full transcript privately and did not advance the
+  analysis queue. VLM processing remained paused and idle throughout rollout.
+- The public dashboard identified both `yoloe-26n-pf-320` and the 9B model.
+  Namespace/label-selected egress reaches the pool. No pool membership, 27B
+  deployment or other consumer configuration was changed.
+- Service image:
+  `localhost:30500/rgb-classifier@sha256:f97c70ade5bc120adea81d9164447199a00ec839ea1e4606fdae830f4335e8d2`.
+- The v7 EfficientDet image and compose rollback file remain on the Uno Q;
+  no historical observations or rollback images were removed.

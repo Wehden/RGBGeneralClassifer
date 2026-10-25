@@ -11,7 +11,7 @@ from rgb.web import create_app
 logging.basicConfig(level=logging.INFO)
 endpoints = json.loads(os.getenv('VLM_ENDPOINTS_JSON','[]'))
 store = Store(Redis.from_url(os.environ['REDIS_URL'], decode_responses=True, socket_connect_timeout=3, socket_timeout=10), os.getenv('IMAGE_DIR','/data/images'), analysis_enabled=bool(endpoints))
-app = create_app(store)
+app = create_app(store,analysis_models=[e['model'] for e in endpoints])
 if __name__ == '__main__':
     if os.getenv('ROLE') != 'ingest':
         start(store, endpoints)

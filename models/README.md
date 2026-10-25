@@ -22,3 +22,10 @@ COCO recognition is limited to its object classes. A bottle label establishes
 neither glass/plastic composition nor recyclability. No automatic disposal-bin
 mapping is implemented. Trash-specific supervised training requires a separate
 labeled dataset, evaluation, license review, and model adapter.
+
+## YOLOE-26n experiment
+
+`yoloe-26n-pf-320/` contains the pinned prompt-free ONNX export and full
+vocabulary manifest. It uses the upstream AGPL-3.0 license, retained beside
+the artifact. Source checkpoint and exported graph hashes are distinct and
+recorded in the manifest. See [trial measurements and runtime](../docs/yoloe-trial.md).

@@ -16,7 +16,6 @@ EfficientDet artifact and retained Uno Q image remain available for rollback.
 The initial comparison used two archived 640x480 camera images, two CPU threads,
 two warm-up calls and 12 timed calls per model, with the live detector stopped.
 Peak RSS is the benchmark process, measured independently for each model.
-These measurements describe execution; no labeled accuracy benchmark was run.
 
 | Model | Input | Median inference | p95 inference | Peak RSS |
 |---|---:|---:|---:|---:|
@@ -41,9 +40,7 @@ released vocabulary and needs no text encoder on the Uno Q.
 Raw paired readings and image hashes are retained privately with the trial
 results. Examples of prompt-free readings at the configured 0.39 threshold
 included `playing card`, `bureau`, `jack`, `crt screen` on the wide desk image,
-and `cup`, `keyboard`, `office desk` on the second image. These are recorded
-model outputs. The trial does not establish that they are more accurate than
-the initial detector's readings.
+and `cup`, `keyboard`, `office desk` on the second image. 
 
 ## Runtime and records
 

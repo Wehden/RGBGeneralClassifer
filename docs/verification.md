@@ -253,8 +253,7 @@ Verified 2026-10-24 evening, America/Los_Angeles:
   The initial independent profile comparison is in `yoloe-trial.md`.
 - Live observation `74c84975-7920-4a84-b74a-4bd940c1bde8` recorded `office desk`,
   `cup` and `computer chair`, with detector/vocabulary provenance. Public review
-  showed these initial YOLOE readings and their scores. No accuracy claim is
-  attached to these readings.
+  showed these initial YOLOE readings and their scores.
 - 66 Python tests and 7 browser behavior tests pass. Added letterboxing/channel
   order, clipping, confidence/class validation, mask-column handling, pinned
   graph/vocabulary, bounded configuration validation and typed provenance tests.

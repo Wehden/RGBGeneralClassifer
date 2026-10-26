@@ -18,6 +18,7 @@ from waitress import serve
 from board.detector import Detector, overlay
 from board.refinements import match
 from board.tracking import Tracker
+from board.transport import Transport
 from board.streaming import response as stream_response
 from common.display import value
 from common.geometry import bounds, fingerprint
@@ -45,8 +46,18 @@ MODEL = getattr(detector,'model','efficientdet-lite0-coco-uint8')
 MODEL_SHA = getattr(detector,'sha256',None) or hashlib.sha256(open('/app/models/efficientdet-lite0.tflite','rb').read()).hexdigest()
 DETECTOR_CONFIG = getattr(detector,'config',{'runtime':'litert','runtime_version':'2.1.6','input_size':320,'inference_threads':int(os.getenv('INFERENCE_THREADS','2'))})
 DETECTOR_CONFIG={**DETECTOR_CONFIG,'capture_limit_fps':MAX_FPS or None}
-policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'display_mode': 'objects', 'version': 0}, 'refinements': None}
+detectors={'objects':detector}
+if BACKEND=='yoloe':
+    detectors['materials']=YOLOEDetector(os.getenv('MATERIALS_MODEL','/app/models/yoloe-26n-materials-320/model.onnx'),os.getenv('MATERIALS_MANIFEST','/app/models/yoloe-26n-materials-320/manifest.json'))
+
+
+def identity(selected):
+    return {'model':getattr(selected,'model',MODEL), 'model_sha256':getattr(selected,'sha256',MODEL_SHA),
+            'detector_config':{**getattr(selected,'config',DETECTOR_CONFIG),'capture_limit_fps':MAX_FPS or None}}
+
+policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'display_mode': 'objects', 'classification_running': False, 'record_observations': False, 'version': 0}, 'refinements': None}
 DB = os.getenv('OUTBOX_DB', '/data/outbox.sqlite3')
+transport = Transport(SOURCE)
 
 
 def database():
@@ -72,9 +83,11 @@ def capture():
     tracker = Tracker()
     cap = None
     last_event = 0
+    last_mode = None
     while True:
         try:
             frame_start = time.monotonic()
+            captured_at = datetime.now(timezone.utc).isoformat()
             if cap is None:
                 cap, path = camera()
                 state['camera'] = path
@@ -82,8 +95,19 @@ def capture():
             if not ok:
                 raise RuntimeError('Camera read failed')
             current_policy = policy
-            detector.threshold = current_policy['settings']['detector_threshold']
-            detections, ms = detector.detect(frame)
+            mode=current_policy['settings'].get('display_mode','objects')
+            selected=detectors.get(mode,detectors['objects'])
+            if mode!=last_mode:
+                tracker=Tracker()
+                last_mode=mode
+                last_event=0
+            selected.threshold=current_policy['settings']['detector_threshold']
+            running=current_policy['settings'].get('classification_running',True)
+            recording=current_policy['settings'].get('record_observations',True)
+            detections,ms=selected.detect(frame) if running else ([],None)
+            provenance=identity(selected)
+            for detection in detections:
+                detection['label_kind']='material' if selected is detectors.get('materials') else 'object'
             tracker.update(detections, time.monotonic())
             for d in detections:
                 reading = None
@@ -104,13 +128,13 @@ def capture():
                 raise RuntimeError('JPEG encoding failed')
             now = time.time()
             with condition:
-                state.update(jpeg=jpeg.tobytes(), sequence=state['sequence']+1, last_frame=now, inference_ms=ms, detections=detections, error=None)
+                state.update(jpeg=jpeg.tobytes(), sequence=state['sequence']+1, last_frame=now, inference_ms=ms, detections=detections, error=None, **provenance, classification_running=running, record_observations=recording, applied_settings_version=current_policy['settings']['version'], proposal_max=max((p['confidence'] for p in getattr(selected,'proposals',[]) ),default=None) if running else None)
                 condition.notify_all()
             # Observation snapshots, not unique-item counts. Cap outbox at 500 rows.
-            if detections and now-last_event >= 15:
+            if recording and running and now-last_event >= 15:
                 raw_ok, raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if raw_ok:
-                    event = {'event_id': str(uuid.uuid4()), 'observed_at': datetime.now(timezone.utc).isoformat(), 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': MODEL, 'sha256': MODEL_SHA, 'config': DETECTOR_CONFIG, 'threshold': detector.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'image_b64': base64.b64encode(raw).decode()}
+                    event = {'event_id': str(uuid.uuid4()), 'observed_at': captured_at, 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': provenance['model'], 'sha256': provenance['model_sha256'], 'config': provenance['detector_config'], 'threshold': selected.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'detector_proposals':getattr(selected,'proposals',[]), 'image_b64': base64.b64encode(raw).decode()}
                     with database() as conn:
                         size = conn.execute('SELECT COUNT(*) FROM outbox').fetchone()[0]
                         if size < 500:
@@ -130,12 +154,9 @@ def capture():
 
 def poll_policy():
     global policy
-    url = os.environ['ARCHIVE_URL'].rstrip('/')+'/api/board-policy/'+SOURCE
     while True:
         try:
-            response = requests.get(url,headers={'Authorization':'Bearer '+os.environ['INGEST_TOKEN']},timeout=5)
-            response.raise_for_status()
-            received = response.json()
+            received = transport.request('GET', '/policy')
             for key in ['detector_threshold','vlm_threshold']:
                 if not .05 <= float(received['settings'][key]) <= .99:
                     raise ValueError('Invalid threshold')
@@ -146,8 +167,6 @@ def poll_policy():
 
 
 def deliver():
-    url = os.environ['ARCHIVE_URL'].rstrip('/') + '/api/ingest'
-    token = os.environ['INGEST_TOKEN']
     while True:
         try:
             with database() as conn:
@@ -156,8 +175,9 @@ def deliver():
                 time.sleep(1)
                 continue
             event_id, payload = rows[0]
-            result = requests.post(url, data=payload, headers={'Authorization': 'Bearer '+token, 'Content-Type': 'application/json'}, timeout=10)
-            result.raise_for_status()
+            result = transport.request('POST', '/observations', json=json.loads(payload))
+            if result.get('event_id') != event_id:
+                raise ValueError('Observation acknowledgement mismatch')
             with database() as conn:
                 conn.execute('DELETE FROM outbox WHERE id=?', (event_id,))
         except Exception as exc:
@@ -165,11 +185,30 @@ def deliver():
             time.sleep(5)
 
 
+def push_live():
+    # At most one pending frame: network outages never build a live-frame backlog.
+    previous = None
+    while True:
+        with condition:
+            condition.wait_for(lambda: state['sequence'] != previous, timeout=3)
+            current = dict(state)
+        previous = current['sequence']
+        age = max(0, time.time()-current['last_frame'])
+        jpeg = current.pop('jpeg') if age < 15 else None
+        current.update(source_id=SOURCE, settings=policy['settings'])
+        try:
+            transport.request('POST', '/live', json={'status':current,
+                'image_b64':base64.b64encode(jpeg).decode() if jpeg else None,
+                'frame_age_s':age})
+        except (requests.RequestException, ValueError):
+            time.sleep(3)
+
+
 @app.get('/healthz')
 def health():
     with condition:
         result = {k:v for k,v in state.items() if k != 'jpeg'}
-    result.update(source_id=SOURCE, model=MODEL, model_sha256=MODEL_SHA, detector_config=DETECTOR_CONFIG, settings=policy['settings'])
+    result.update(source_id=SOURCE, settings=policy['settings'])
     return jsonify(result), 200 if time.time()-result['last_frame'] < 15 else 503
 
 
@@ -190,4 +229,5 @@ if __name__ == '__main__':
     threading.Thread(target=capture, daemon=True).start()
     threading.Thread(target=deliver, daemon=True).start()
     threading.Thread(target=poll_policy, daemon=True).start()
+    threading.Thread(target=push_live, daemon=True).start()
     serve(app, host='0.0.0.0', port=8080, threads=10, channel_timeout=20)

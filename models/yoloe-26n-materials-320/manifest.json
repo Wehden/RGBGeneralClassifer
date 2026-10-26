@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "model": "yoloe-26n-materials-320",
+  "task": "materials",
+  "checkpoint": "yoloe-26n-seg.pt",
+  "checkpoint_url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26n-seg.pt",
+  "checkpoint_sha256": "1741c1f8da3cea47e2c01829c334a50dc0b9bbd05e685b90a3ce84fae32c8c1b",
+  "sha256": "23960eb842490d643721b1bd14c5c8491798343d91b3320e6511a4d5388a6bcf",
+  "input_size": 320,
+  "precision": "float32",
+  "prompt_mode": "text",
+  "prompts": [
+    "plastic object",
+    "paper",
+    "metal object",
+    "plastic film",
+    "liquid",
+    "glass object",
+    "cardboard",
+    "wooden object",
+    "textile",
+    "rubber object",
+    "ceramic object",
+    "foam"
+  ],
+  "labels": [
+    "plastic",
+    "paper",
+    "metal",
+    "film",
+    "liquid",
+    "glass",
+    "cardboard",
+    "wood",
+    "textile",
+    "rubber",
+    "ceramic",
+    "foam"
+  ],
+  "exporter": "ultralytics==8.4.188",
+  "opset": 17,
+  "max_det": 100,
+  "agnostic_nms": true,
+  "end2end": true,
+  "output_contract": [
+    [
+      1,
+      100,
+      38
+    ],
+    [
+      1,
+      32,
+      80,
+      80
+    ]
+  ],
+  "license": "AGPL-3.0",
+  "text_encoder_sha256": "35d7f213e4d75f38514e4656ad3cb91158bd33e3805d8ac349f23b186f66982f",
+  "torch": "2.9.1+cpu",
+  "onnx": "1.20.1",
+  "onnxslim": "0.1.82",
+  "manifest_path": "models/yoloe-26n-materials-320/manifest.json"
+}

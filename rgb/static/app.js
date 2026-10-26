@@ -1,23 +1,22 @@
 const $ = id => document.getElementById(id);
-let sources = [], cursor = null, selected = null, timer, detailTimer, settings, streamTimer, streamGeneration=0;
+let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
+const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
+window.addEventListener('pagehide', () => liveVideo.stop());
+window.addEventListener('pageshow', event => { if (event.persisted) live(); });
 function element(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
 function date(value) { return new Date(value).toLocaleString(); }
 async function status() {
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('live-state').textContent = s.error ? s.error : $('live').naturalWidth>0?'LIVE':'Connecting live frame…'; $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${s.detections?.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if($('live').complete && !$('live').naturalWidth)retryLive(); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · Uno Q ${s.detector_config?.runtime ?? 'CPU'}`; }
-  catch { $('live-state').textContent = 'Camera unavailable · reconnecting'; $('timing').textContent = ''; }
+  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${s.detections?.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · Uno Q ${s.detector_config?.runtime ?? 'CPU'}`; }
+  catch { $('timing').textContent = 'Camera status unavailable'; }
 }
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
-  clearTimeout(streamTimer); streamTimer=null;
-  $('live').src = `/api/live/${encodeURIComponent(s.id)}/stream?connection=${Date.now()}-${++streamGeneration}`;
+  liveVideo.start(`/api/live/${encodeURIComponent(s.id)}/stream`);
   $('camera-location').textContent = s.location ? `${s.location} · ${s.location_method}` : 'Location unassigned';
   loadLocation(); status(); clearInterval(timer); timer = setInterval(status, 10000);
 }
-function retryLive() { $('live-state').textContent='Camera unavailable · reconnecting'; if(!streamTimer)streamTimer=setTimeout(live,5000); }
-$('live').onload = () => { if($('live').naturalWidth>0)$('live-state').textContent='LIVE'; else retryLive(); };
-$('live').onerror = retryLive;
 async function history(d, node) {
   try { const entries = await get(`/api/detections/${d.detection_id}/history`); node.replaceChildren();
     if (!entries.length) node.append(element('p',`Classifier: ${d.label} · ${(d.confidence*100).toFixed(1)}%`));

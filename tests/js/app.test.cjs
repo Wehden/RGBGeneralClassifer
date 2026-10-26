@@ -13,7 +13,7 @@ class Element {
 }
 function setup(){
   const nodes=new Map();
-  const context=vm.createContext({document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
+  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
   vm.runInContext(fs.readFileSync('rgb/static/app.js','utf8'),context);
   return {context,node:id=>context.document.getElementById(id)};
 }
@@ -122,19 +122,14 @@ test('catch up keeps one snapshot and source across pages',async()=>{
   assert.equal(node('catch-up').disabled,false);
 });
 
-test('live reconnection changes the resource URL and healthy status does not hide a failed image',async()=>{
+test('healthy camera status cannot hide a stalled image connection',async()=>{
   const {context,node}=setup();
   vm.runInContext("sources=[{id:'unoq'}]",context);node('source').value='unoq';
-  context.live();const first=node('live').src;
-  context.live();assert.notEqual(node('live').src,first);
-  context.fetch=async()=>json({inference_ms:320});
-  node('live').naturalWidth=0;await context.status();
-  assert.equal(node('live-state').textContent,'Connecting live frame…');
-  node('live').complete=true;await context.status();
-  assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
-  node('live').onload();assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
-  node('live').naturalWidth=640;await context.status();
-  assert.equal(node('live-state').textContent,'LIVE');
+  context.live();assert.equal(node('live-state').textContent,'Connecting live frame…');
+  node('live-state').textContent='Stale · showing last frame · reconnecting';
+  context.fetch=async()=>json({inference_ms:320});await context.status();
+  assert.equal(node('live-state').textContent,'Stale · showing last frame · reconnecting');
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/live/unoq/stream');
 });
 
 test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{

@@ -97,3 +97,27 @@ test('a pre-pause status response cannot overwrite the confirmed paused state',a
   await node('pause-vlm').onclick();resolve(json({paused:false,enabled:true,active:{}}));await old;
   assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
 });
+
+test('local classification preview sends no-recording policy independently of VLM',async()=>{
+  const {context,node}=setup();
+  node('classification-mode').value='preview';
+  let request;
+  context.fetch=async(url,options)=>{request={url,body:JSON.parse(options.body)};return json({classification_running:true,record_observations:false});};
+  await context.setClassification(true);
+  assert.equal(request.url,'/api/settings');
+  assert.deepEqual(request.body,{classification_running:true,record_observations:false});
+  assert.equal(node('classification-state').textContent,'Control saved · awaiting Uno Q');
+  context.acknowledgeClassification({classification_running:true,record_observations:false,applied_settings_version:0});
+  assert.equal(node('classification-state').textContent,'Running · preview only');
+  assert.equal(request.body.vlm_paused,undefined);
+});
+
+test('catch up keeps one snapshot and source across pages',async()=>{
+  const {context,node}=setup();
+  node('source').value='unoq';
+  const bodies=[];
+  context.fetch=async(url,options)=>{bodies.push(JSON.parse(options.body));return json({batch_id:'batch',queued:bodies.length,done:bodies.length===2});};
+  await node('catch-up').onclick();
+  assert.deepEqual(bodies,[{source_id:'unoq'},{source_id:'unoq',batch_id:'batch'}]);
+  assert.equal(node('catch-up').disabled,false);
+});

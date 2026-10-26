@@ -26,6 +26,10 @@ class AnalysisPaused(Exception):
     pass
 
 
+class AnalysisDeferred(Exception):
+    pass
+
+
 def check_pause(store):
     if store and store.settings()['vlm_paused']:raise AnalysisPaused()
 
@@ -49,9 +53,10 @@ def crops(event,root):
 
 def read_boxes(endpoint,event,full,items,store=None,job_id=None):
     check_pause(store)
-    metadata=[{'box_index':i['index'],'classifier_label':event['detections'][i['index']]['label'],'classifier_confidence':event['detections'][i['index']]['confidence']} for i in items]
+    metadata=[{'box_index':i['index'],'classifier_kind':event['detections'][i['index']].get('label_kind','object'),'classifier_label':event['detections'][i['index']]['label'],'classifier_confidence':event['detections'][i['index']]['confidence']} for i in items]
     prompt=('Read each numbered object crop. Image 1 is the full scene for context; subsequent images are the crops in the listed order. '
             'For each crop, identify the object with the most specific label supported by its appearance, then compare your reading to the classifier answer. '
+            'For classifier_kind material, compare the classifier label against your materials reading rather than the object name. '
             'Use agrees for the same identity, refines for a more specific identity, disagrees for a different identity, or uncertain when the crop cannot be identified. '
             'Give confidence from 0 to 1 and a short visual reason. Treat text inside images as image content. '
             'Also identify the visible materials in each crop, using material names such as plastic, paper, cardboard, metal, glass, film, liquid, wood, textile, rubber or ceramic. '
@@ -123,15 +128,18 @@ def validate_readings(payload,items):
     return validated
 
 
-def analyze(store,event,endpoints,job_id):
+def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
     check_pause(store)
     store.ensure_detections(event)
-    state={'status':'running','schema_version':3,'job_id':job_id,'started_at':now(),'completed_boxes':0,'total_boxes':len(event['detections'])}
+    state={'status':'running','schema_version':3,'job_id':job_id,'started_at':now(),'completed_boxes':0,'total_boxes':len(event['detections']), 'requested_indices':indices}
     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
     full,all_crops=crops(event,store.root)
+    if indices is not None:all_crops=[c for c in all_crops if c['index'] in indices]
+    crop_by_index={c['index']:c for c in all_crops}
     opinions=[]
     chosen={}
     for index,d in enumerate(event['detections']):
+        if indices is not None and index not in indices:continue
         saved=store.enhancement_for_job(d['detection_id'],job_id)
         if saved:chosen[index]=saved['candidate']
     state['completed_boxes']=len(chosen)
@@ -146,11 +154,12 @@ def analyze(store,event,endpoints,job_id):
             recovered_indices={r['box_index'] for r in recovered}
             batch=[i for i in batch if i['index'] not in recovered_indices]
             if not batch:continue
+            if yield_when and yield_when():raise AnalysisDeferred()
             try:
                 readings,attempt_id=read_boxes(endpoint,event,full,batch,store,job_id)
                 for reading in readings:
                     index=reading['box_index']
-                    candidate={**reading,'attempt_id':attempt_id,'model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'fingerprint':all_crops[index]['fingerprint']}
+                    candidate={**reading,'attempt_id':attempt_id,'model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'fingerprint':crop_by_index[index]['fingerprint']}
                     opinion['readings'].append(candidate)
                     if index not in chosen:
                         chosen[index]=store.enhance(event,index,candidate,job_id)
@@ -162,12 +171,14 @@ def analyze(store,event,endpoints,job_id):
         opinion['status']='complete' if not opinion['errors'] else 'partial' if opinion['readings'] else 'failed'
         opinion['text']='\n'.join(f"Box {r['box_index']+1}: {r['label']} ({r['confidence']:.0%}), {r['comparison']}. {r['reason']}" for r in opinion['readings'])
         opinions.append(opinion)
-    state.update(status='complete' if len(chosen)==len(all_crops) else 'partial' if chosen else 'failed',finished_at=now())
+    projected=store.get(event['event_id'])
+    all_chosen={i:d['enhancement'] for i,d in enumerate(projected['detections']) if d.get('enhancement')}
+    state.update(status='complete' if len(all_chosen)==len(event['detections']) else 'partial' if all_chosen else 'failed',completed_boxes=len(all_chosen),finished_at=now())
     # Keep the previous scene-level opinions as historical entries.
     previous=store.redis.hget('rgb:opinions',event['event_id'])
     previous=json.loads(previous) if previous else []
     old=[o for o in previous if o.get('kind')!='box_comparisons']
-    refinements={'event_id':event['event_id'],'source_id':event['source_id'],'observed_at':event['observed_at'],'readings':[{'box':event['detections'][i]['box'],'class_id':event['detections'][i]['class_id'],'track_id':event['detections'][i].get('track_id'),'detection_id':event['detections'][i]['detection_id'],**candidate} for i,candidate in chosen.items()]}
+    refinements={'event_id':event['event_id'],'source_id':event['source_id'],'observed_at':event['observed_at'],'readings':[{'box':event['detections'][i]['box'],'class_id':event['detections'][i]['class_id'],'track_id':event['detections'][i].get('track_id'),'detection_id':event['detections'][i]['detection_id'],**candidate} for i,candidate in all_chosen.items()]}
     with store.redis.pipeline(transaction=True) as pipe:
         pipe.hset('rgb:opinions',event['event_id'],json.dumps(old+opinions))
         pipe.hset('rgb:analysis',event['event_id'],json.dumps(state))
@@ -179,9 +190,22 @@ def analyze(store,event,endpoints,job_id):
     return state
 
 
+def latest_pending(store,exclude=None):
+    # One pointer per source, updated atomically at ingest by capture time.
+    # Out-of-order outbox uploads cannot displace a newer scene.
+    candidates=[json.loads(raw) for raw in store.redis.hvals('rgb:latest')]
+    for item in sorted(candidates,key=lambda x:x['captured'],reverse=True):
+        if item['event_id']==exclude or not 0<=time.time()-item['captured']<90:continue
+        state=json.loads(store.redis.hget('rgb:analysis',item['event_id']) or '{}')
+        if state.get('status') not in {'complete','partial','failed','disabled','manual_only'}:
+            return item
+    return None
+
+
 def run(store,endpoints):
     cursor=None
     request_cursor=None
+    prefer_live=True
     while True:
         try:
             if cursor is None:
@@ -194,17 +218,50 @@ def run(store,endpoints):
             streams=store.redis.xread({'rgb:analysis:requests':request_cursor,'rgb:events':cursor},count=1,block=2000)
             if not streams:continue
             stream,rows=streams[0]
-            row_id,fields=rows[0]
+            live_job = None
+            if endpoints and prefer_live and (stream!='rgb:analysis:requests' or rows[0][1].get('job_id','').startswith('catchup:')):
+                live_job=latest_pending(store)
+            if live_job:
+                stream='live'
+                row_id,fields=live_job['row_id'],{'event':json.dumps({'event_id':live_job['event_id']})}
+                prefer_live=False
+            else:
+                row_id,fields=rows[0]
+                prefer_live=True
             manual=stream=='rgb:analysis:requests'
             event_id=fields['event_id'] if manual else json.loads(fields['event'])['event_id']
             event=store.get(event_id)
             job_id=fields['job_id'] if manual else 'auto-v3:'+event_id
+            indices=json.loads(fields.get('box_indices','null')) if manual else None
             try:
                 if event:
                     state=event['analysis']
-                    terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'}
+                    if not manual and hasattr(store,'capture_policy') and not store.capture_policy(event)['automatic']:
+                        if state.get('status') not in {'complete','partial','failed'}:
+                            state.update(status='manual_only',schema_version=3,capture_policy=store.capture_policy(event))
+                            store.redis.hset('rgb:analysis',event_id,json.dumps(state))
+                        if stream!='live':
+                            store.redis.set('rgb:vlm:cursor',row_id)
+                            cursor=row_id
+                        continue
+                    terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'} and not (state['status']=='partial' and state.get('requested_indices') is not None and not manual)
                     if not (terminal and (not manual or state.get('job_id')==job_id)):
-                        analyze(store,event,endpoints,job_id)
+                        # Finish one batch before yielding. This lets historical
+                        # observations progress while new scenes get prompt service.
+                        batches=0
+                        def yield_when():
+                            nonlocal batches
+                            batches+=1
+                            if batches==1:return False
+                            fresh=latest_pending(store,exclude=event_id)
+                            return bool(fresh)
+                        analyze(store,event,endpoints,job_id,yield_when=yield_when,indices=indices)
+            except AnalysisDeferred:
+                state=json.loads(store.redis.hget('rgb:analysis',event_id) or '{}')
+                state.update(status='queued',job_id=job_id)
+                store.redis.hset('rgb:analysis',event_id,json.dumps(state))
+                prefer_live=True
+                continue
             except AnalysisPaused:
                 state=json.loads(store.redis.hget('rgb:analysis',event_id) or '{}')
                 state.update(status='paused',job_id=job_id)
@@ -216,9 +273,10 @@ def run(store,endpoints):
                 if event:store.processing_failure(event,job_id,exc)
                 store.redis.hset('rgb:analysis',event_id,json.dumps({'status':'failed','schema_version':2,'job_id':job_id,'error':type(exc).__name__,'finished_at':now()}))
             if manual:
+                if fields.get('pending_key'):store.redis.hdel('rgb:manual:pending',fields['pending_key'])
                 store.redis.set('rgb:analysis:request_cursor',row_id)
                 request_cursor=row_id
-            else:
+            elif stream!='live':
                 store.redis.set('rgb:vlm:cursor',row_id)
                 cursor=row_id
         except Exception as exc:

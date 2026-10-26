@@ -1,13 +1,13 @@
 # Portable networking and classification acceptance, 2026-10-26 UTC
 
-Application source: `7fce583` on PR #3. This is a manual deployment; neither
+Application source: `0a5ab99` on PR #3. This is a manual deployment; neither
 PR #3 nor the supporting LaminarAuth PR #37 was merged by this work.
 
 ## Installed artifacts
 
 | Component | Installed immutable identity |
 | --- | --- |
-| RGB web and ingest | `localhost:30500/rgb-classifier@sha256:34330f451a905de306c1f27f2720b5910d5d4ae119c3a33c5a95eee973a7cbef` |
+| RGB web and ingest | `localhost:30500/rgb-classifier@sha256:8f1e8e59c2882bb401835fadc375bc08b7ad2ad4a17092ce0f37446c96f0896e` |
 | Uno Q native image | `rgb-classifier:unoq-portable-materials-20261026-v4`, image ID `sha256:a86c90d8d3c7b7b742c8416e3a5f4d52d549a315b2dd9447580764192bcd687e` |
 | Materials graph | `23960eb842490d643721b1bd14c5c8491798343d91b3320e6511a4d5388a6bcf` |
 | Objects graph | `8120cf9b3f3cf1dfbbc768b2eb869b48a18f6958f7272e1ba59258c1030ae806` |
@@ -86,13 +86,14 @@ Runtime was restored to Objects, local classification running, recording on,
 thresholds 0.45/0.65 and VLM unpaused, matching the pre-test operator values.
 Temporary rollout pauses finish in-flight calls before restarting web.
 
-Five valid PR findings were addressed: proposal dictionary aliasing, stale JPEG
+Six valid PR findings were addressed: proposal dictionary aliasing, stale JPEG
 serialization, pagination through empty scenes, per-endpoint checkpoint recovery,
-and refreshing detail polling after individual requests. Regression coverage
+refreshing detail polling after individual requests, and retaining automatic
+coverage after a failed subset request. Regression coverage
 includes 501 empty scenes and a two-endpoint job interrupted during its second
 endpoint; resumption performs each successful batch once.
 
-Validation: 94 Python tests and 11 browser behavior tests; JavaScript syntax,
+Validation: 95 Python tests and 11 browser behavior tests; JavaScript syntax,
 model SHA checks, service build and PR CI. CI remains validation-only.
 
 ## Retained rollback

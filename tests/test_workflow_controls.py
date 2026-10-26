@@ -152,3 +152,20 @@ def test_empty_frame_retains_below_threshold_proposals(client,event):
     proposal['confidence']=float('nan')
     event['event_id']=str(uuid4())
     assert c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40}).status_code==400
+
+
+def test_live_results_publish_before_checkpoint_or_pause(client,event,monkeypatch):
+    from rgb.enrichment import AnalysisDeferred
+    c,store=client
+    event['detections']=[dict(event['detections'][0]) for _ in range(5)]
+    c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40})
+    saved=store.get(event['event_id'])
+    post=Mock(return_value=response([reading(index=i) for i in range(4)]))
+    monkeypatch.setattr('rgb.enrichment.requests.post',post)
+    yield_when=Mock(side_effect=[False,True])
+    with pytest.raises(AnalysisDeferred):
+        analyze(store,saved,[{'url':'http://vlm','model':'qwen'}],'checkpoint',yield_when=yield_when)
+    published=json.loads(store.redis.hget('rgb:refinements',event['source_id']))
+    assert len(published['readings'])==4
+    assert post.call_count==1
+    assert published['event_id']==saved['event_id']

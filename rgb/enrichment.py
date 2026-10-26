@@ -128,6 +128,23 @@ def validate_readings(payload,items):
     return validated
 
 
+def publish_refinements(store,event):
+    projected=store.get(event['event_id'])
+    readings=[{'box':d['box'],'class_id':d['class_id'],'track_id':d.get('track_id'),
+               'detection_id':d['detection_id'],**d['enhancement']}
+              for d in projected['detections'] if d.get('enhancement')]
+    if not readings:return
+    refinements={'event_id':event['event_id'],'source_id':event['source_id'],
+                 'observed_at':event['observed_at'],'readings':readings}
+    script="""
+    local prior=redis.call('HGET',KEYS[1],ARGV[1])
+    if prior and cjson.decode(prior).observed_at > ARGV[2] then return 0 end
+    redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
+    return 1
+    """
+    store.redis.eval(script,1,'rgb:refinements',event['source_id'],event['observed_at'],json.dumps(refinements))
+
+
 def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
     check_pause(store)
     store.ensure_detections(event)
@@ -165,6 +182,7 @@ def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
                         chosen[index]=store.enhance(event,index,candidate,job_id)
                     state['completed_boxes']=len(chosen)
                     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
+                publish_refinements(store,event)
             except (requests.RequestException,KeyError,TypeError,ValueError) as exc:
                 failures+=1
                 opinion['errors'].append({'box_indices':[i['index'] for i in batch],'error':str(exc)[:250] if isinstance(exc,ValueError) else type(exc).__name__})
@@ -178,15 +196,11 @@ def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
     previous=store.redis.hget('rgb:opinions',event['event_id'])
     previous=json.loads(previous) if previous else []
     old=[o for o in previous if o.get('kind')!='box_comparisons']
-    refinements={'event_id':event['event_id'],'source_id':event['source_id'],'observed_at':event['observed_at'],'readings':[{'box':event['detections'][i]['box'],'class_id':event['detections'][i]['class_id'],'track_id':event['detections'][i].get('track_id'),'detection_id':event['detections'][i]['detection_id'],**candidate} for i,candidate in all_chosen.items()]}
     with store.redis.pipeline(transaction=True) as pipe:
         pipe.hset('rgb:opinions',event['event_id'],json.dumps(old+opinions))
         pipe.hset('rgb:analysis',event['event_id'],json.dumps(state))
-        # Manual readings of old snapshots must not replace newer live results.
-        current=store.redis.hget('rgb:refinements',event['source_id'])
-        if not current or json.loads(current)['observed_at']<=event['observed_at']:
-            pipe.hset('rgb:refinements',event['source_id'],json.dumps(refinements))
         pipe.execute()
+    publish_refinements(store,event)
     return state
 
 

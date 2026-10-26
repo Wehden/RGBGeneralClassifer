@@ -160,7 +160,14 @@ curl -s -H 'Content-Type: application/json' -d '{}' \
   http://127.0.0.1:8080/api/camera/observations
 ```
 
-Use `{"frame_id":"<UUID>"}` to pin a cached frame. Repeated capture of that frame
+Without `frame_id`, capture selects the latest fresh detector-completed frame
+from the current camera session and calibration, including its matching sensor
+evidence. If no such frame is ready, it returns HTTP 503 without saving an
+observation; retry after detection completes.
+
+Use `{"frame_id":"<UUID>"}` to pin a cached frame. A new pinned observation
+requires a matching completed detection result; otherwise it returns HTTP 503
+without saving. Repeated capture of an already archived frame
 returns its original observation ID. Sensor assets are available at
 `/api/events/<observation-id>/assets/{depth_native,ir_native,depth_registered,depth_preview,ir_preview,calibration,metadata}`.
 

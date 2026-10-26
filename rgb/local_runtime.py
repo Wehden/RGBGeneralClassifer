@@ -144,15 +144,29 @@ class LocalRuntime:
                                  'display_mode':settings['display_mode'],'match_method':'continuous_track',
                                  'match_iou':overlap,'match_age_s':age,'detection_id':reading['detection_id']}
 
-    def archive(self,frame,result=None):
+    def archive(self,frame=None,result=None):
         if not self.archive_slots.acquire(blocking=False):raise RuntimeError('Archive mutation queue is full')
         try:
+            if frame is None:
+                # The camera advances faster than detection. Capture a completed
+                # frame/result pair instead of inventing an empty detection set.
+                with self.camera.condition:
+                    current=self.camera.get()
+                    latest=self.camera.latest_detection
+                    if (not latest
+                            or latest[0].metadata['session_id']!=current.metadata['session_id']
+                            or latest[0].metadata['calibration_sha256']!=current.metadata['calibration_sha256']
+                            or latest[0].color_rgb.shape!=current.color_rgb.shape
+                            or time.monotonic()-latest[0].metadata['received_monotonic_s']>self.camera.freshness_s):
+                        raise CameraUnavailable('No fresh detector-completed frame available; retry capture')
+                    frame,result=latest
             existing=self.store.event_for_frame(frame.id)
             if existing:return existing
             if result is None:
                 with self.camera.condition:latest=self.camera.latest_detection
-                result=latest[1] if latest and latest[0].id==frame.id else {'detections':[],'detector':{
-                    'model':'pending','sha256':None,'config':{'state':'not_available_for_frame'}}}
+                if not latest or latest[0].id!=frame.id:
+                    raise CameraUnavailable('Detection is not available for this frame; retry capture')
+                result=latest[1]
             sensors={}
             for channel,data in frame.previews.items():sensors[channel+'_preview']=self.store.asset(data,'.jpg')
             for name in ['depth_native','ir_native','depth_registered']:

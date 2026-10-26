@@ -121,6 +121,69 @@ def test_frame_eviction_and_pinned_detections_pending(local):
     with pytest.raises(FrameExpired):camera.get(frame.id)
 
 
+def test_manual_capture_uses_completed_frame_and_remains_analyzable(local):
+    store,camera,frame,result,runtime,app=local
+    newer=make_frame(np.zeros((30,40,3),np.uint8),None,None,None,
+                     {**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()})
+    camera.publish(newer)
+    runtime.update_capture_settings({'capture_paused':True})
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==201
+    assert response.json['frame_id']==frame.id
+    event=store.raw(response.json['event_id'])
+    assert event['detections']==result['detections']
+    assert event['detector']==result['detector']
+    assert event['sensor_assets']['color_preview']['sha256']==hashlib.sha256(frame.previews['color']).hexdigest()
+    assert store.event_for_frame(newer.id) is None
+    runtime.client=FakeBedrock()
+    store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    assert len(runtime.client.calls)==1
+    assert store.get(event['event_id'])['detections'][0]['enhancement']['label']=='plastic bottle'
+
+
+@pytest.mark.parametrize('unavailable',['missing','stale','session','calibration','dimensions'])
+def test_manual_capture_rejects_unusable_detection_without_archiving(local,unavailable):
+    store,camera,frame,result,runtime,app=local
+    if unavailable=='missing':camera.latest_detection=None
+    elif unavailable=='stale':frame.metadata['received_monotonic_s']=time.monotonic()-camera.freshness_s-1
+    metadata={**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()}
+    if unavailable=='session':metadata['session_id']=str(uuid4())
+    if unavailable=='calibration':metadata['calibration_sha256']='b'*64
+    shape=(20,20,3) if unavailable=='dimensions' else (30,40,3)
+    camera.publish(make_frame(np.zeros(shape,np.uint8),None,None,None,metadata))
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==503
+    assert store.storage_status()['observations']==0
+
+
+def test_pinned_capture_waits_for_matching_detection_and_preserves_identity(local):
+    store,camera,frame,result,runtime,app=local
+    newer=make_frame(np.zeros((30,40,3),np.uint8),None,None,None,
+                     {**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()})
+    camera.publish(newer)
+    client=app.test_client()
+    assert client.post('/api/camera/observations',json={'frame_id':newer.id}).status_code==503
+    with pytest.raises(CameraUnavailable):runtime.archive(newer)
+    assert store.storage_status()['observations']==0
+    camera.latest_detection=(newer,{**result,'frame_id':newer.id})
+    saved=client.post('/api/camera/observations',json={'frame_id':newer.id})
+    assert saved.status_code==201 and saved.json['frame_id']==newer.id
+    camera.latest_detection=None
+    repeated=client.post('/api/camera/observations',json={'frame_id':newer.id})
+    assert repeated.status_code==201 and repeated.json==saved.json
+    assert store.storage_status()['observations']==1
+
+
+def test_manual_capture_preserves_genuinely_empty_detection_result(local):
+    store,camera,frame,result,runtime,app=local
+    camera.latest_detection=(frame,{**result,'detections':[]})
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==201
+    event=store.raw(response.json['event_id'])
+    assert event['detections']==[] and event['detector']==result['detector']
+
+
 def test_depth_statistics_units_invalids_and_minimum_samples():
     depth=np.array([[0,1000,2000],[3000,4000,5000]],np.uint16)
     result=depth_summary(depth,[0,0,1,1],.5,minimum=3)

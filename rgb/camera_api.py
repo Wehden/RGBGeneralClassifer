@@ -163,8 +163,10 @@ class CameraAPI:
         if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc!=request.host:return 'Origin mismatch',403
         data=request.get_json(silent=True)
         if not isinstance(data,dict) or set(data)-{'frame_id'}:return jsonify(error='Expected optional frame_id'),400
-        frame,error=self._frame(data)
-        if error:return error
+        frame=None
+        if data.get('frame_id') is not None:
+            frame,error=self._frame(data)
+            if error:return error
         try:event=self.runtime.archive(frame)
         except RuntimeError as exc:return jsonify(error=str(exc)),429
         return jsonify(observation_id=event['event_id'],event_id=event['event_id'],frame_id=event['frame_id']),201

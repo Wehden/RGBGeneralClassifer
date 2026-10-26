@@ -35,6 +35,7 @@ jobs:
         run: |
           node --check rgb/static/app.js
           node --check rgb/static/records.js
+          node --check rgb/static/pointcloud.js
       - name: Test browser behavior
         run: node --test tests/js/*.test.cjs
       - name: Verify pinned model

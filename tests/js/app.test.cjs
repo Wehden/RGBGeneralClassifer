@@ -97,3 +97,40 @@ test('a pre-pause status response cannot overwrite the confirmed paused state',a
   await node('pause-vlm').onclick();resolve(json({paused:false,enabled:true,active:{}}));await old;
   assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
 });
+
+test('capture pause remains separate from VLM pause and keeps manual capture available',async()=>{
+  const {context,node}=setup();
+  context.renderCapture({capture:{paused:false,interval_s:60,next_in_s:20}});
+  let saved;
+  context.fetch=async(url,options)=>{
+    if(options){saved=JSON.parse(options.body);return json({capture_paused:true,capture_interval_s:60});}
+    return json({enabled:true,paused:false,capture:{paused:true,interval_s:60,next_in_s:null}});
+  };
+  await node('pause-capture').onclick();
+  assert.deepEqual(saved,{capture_paused:true});
+  assert.equal(node('pause-capture').textContent,'Resume capture');
+  assert.match(node('capture-state').textContent,/live views continue/);
+  assert.equal(node('pause-vlm').textContent,'Pause VLM');
+  assert.notEqual(node('capture-observation').disabled,true);
+});
+
+test('a stale status cannot undo capture pause; edited intervals survive polling',async()=>{
+  const {context,node}=setup();let resolve;
+  context.fetch=()=>new Promise(r=>{resolve=r;});
+  const stale=context.vlmStatus();
+  context.fetch=async(url,options)=>json(options?{capture_paused:true,capture_interval_s:60}:
+    {enabled:true,paused:false,capture:{paused:true,interval_s:60}});
+  await node('pause-capture').onclick();
+  resolve(json({enabled:true,paused:false,capture:{paused:false,interval_s:60}}));await stale;
+  assert.equal(node('pause-capture').textContent,'Resume capture');
+  node('capture-interval').value='300';node('capture-interval').oninput();
+  context.renderCapture({capture:{paused:true,interval_s:60}});
+  assert.equal(node('capture-interval').value,'300');
+});
+
+test('capture interval input validation avoids an invalid settings request',async()=>{
+  const {context,node}=setup();let calls=0;
+  context.fetch=async()=>{calls++;return json({});};
+  node('capture-interval').value='0';await node('apply-capture-interval').onclick();
+  assert.equal(calls,0);assert.match(node('capture-state').textContent,/1 to 86400/);
+});

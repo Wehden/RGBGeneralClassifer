@@ -130,6 +130,9 @@ test('live reconnection changes the resource URL and healthy status does not hid
   context.fetch=async()=>json({inference_ms:320});
   node('live').naturalWidth=0;await context.status();
   assert.equal(node('live-state').textContent,'Connecting live frame…');
+  node('live').complete=true;await context.status();
+  assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
+  node('live').onload();assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
   node('live').naturalWidth=640;await context.status();
   assert.equal(node('live-state').textContent,'LIVE');
 });

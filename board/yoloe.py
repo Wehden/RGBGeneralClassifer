@@ -64,4 +64,4 @@ class Detector:
         output=self.session.run(None,{self.input_name:tensor})[0]
         ms=(time.monotonic()-start)*1000
         self.proposals=decode(output,self.labels,frame.shape,transform,0)
-        return [p for p in self.proposals if p['confidence']>=self.threshold],round(ms,2)
+        return [dict(p) for p in self.proposals if p['confidence']>=self.threshold],round(ms,2)

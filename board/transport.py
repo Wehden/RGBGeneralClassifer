@@ -1,5 +1,6 @@
 """Outbound HTTPS only. Network identity is the source ID, never an IP address."""
 import os
+import json
 import ipaddress
 import threading
 from urllib.parse import urlsplit
@@ -46,3 +47,13 @@ class Transport:
         if not isinstance(data, dict):
             raise ValueError('Expected device response')
         return data
+
+
+def observation_payload(payload):
+    data=json.loads(payload)
+    # Older queued payloads may contain overlay/tracking keys on shared proposals.
+    # Keep the original outbox row until the corrected raw proposals are acknowledged.
+    if 'detector_proposals' in data:
+        data['detector_proposals']=[{key:proposal[key] for key in ['class_id','label','confidence','box']}
+                                    for proposal in data['detector_proposals']]
+    return data

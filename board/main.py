@@ -19,7 +19,7 @@ from common.http import OPTIONS as HTTP_OPTIONS
 from board.detector import Detector, overlay
 from board.refinements import match
 from board.tracking import Tracker
-from board.transport import Transport
+from board.transport import Transport, observation_payload
 from board.streaming import response as stream_response
 from common.display import value
 from common.geometry import bounds, fingerprint
@@ -176,7 +176,7 @@ def deliver():
                 time.sleep(1)
                 continue
             event_id, payload = rows[0]
-            result = transport.request('POST', '/observations', json=json.loads(payload))
+            result = transport.request('POST', '/observations', json=observation_payload(payload))
             if result.get('event_id') != event_id:
                 raise ValueError('Observation acknowledgement mismatch')
             with database() as conn:

@@ -77,3 +77,25 @@ def test_rejects_invalid_or_unbounded_detector_config(event,sources,config):
 
 from test_web import client
 from test_events import event,sources
+
+
+def test_tracking_and_display_do_not_mutate_raw_proposals(client,event):
+    from board.transport import observation_payload
+    import uuid
+    model=object.__new__(Detector)
+    model.size=320;model.labels=['fan'];model.threshold=.4;model.input_name='images'
+    model.session=Mock()
+    model.session.run.return_value=[np.array([[[0,0,100,100,.8,0]]],dtype=np.float32)]
+    detections,_=model.detect(np.zeros((320,320,3),dtype=np.uint8))
+    detections[0].update(track_id=str(uuid.uuid4()),display_label='fan',label_kind='object')
+    assert set(model.proposals[0])=={'class_id','label','confidence','box'}
+    event.update(detections=detections,detector_proposals=model.proposals)
+    c,store=client
+    assert c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40}).status_code==201
+    assert len(store.raw(event['event_id'])['detector_proposals'])==1
+    # Repair the formerly shared payload shape without changing the input row.
+    event['detector_proposals']=[dict(detections[0])]
+    original=json.dumps(event)
+    repaired=observation_payload(original)
+    assert set(repaired['detector_proposals'][0])=={'class_id','label','confidence','box'}
+    assert 'track_id' in json.loads(original)['detector_proposals'][0]

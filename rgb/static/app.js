@@ -97,6 +97,12 @@ $('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('s
 (async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
 
 let vlmPaused=false,vlmChanging=false,vlmGeneration=0,modelDirty=false;
+let providerCatalog=[],modelChanging=false;
+function modelChoices(provider,selected) {
+  const models=providerCatalog.find(p=>p.id===provider)?.models||[];
+  $('vlm-model-choice').replaceChildren(...models.map(m=>{const o=element('option',m.label);o.value=m.id;return o;}));
+  $('vlm-model-choice').value=models.some(m=>m.id===selected)?selected:(models[0]?.id||'');
+}
 let capturePaused=false,captureChanging=false,captureGeneration=0,captureIntervalDirty=false;
 function renderCapture(state) {
   const capture=state.capture;
@@ -114,14 +120,21 @@ function renderVlm(state) {
   $('pause-vlm').textContent=state.paused?'Resume VLM':'Pause VLM';
   $('pause-vlm').disabled=vlmChanging||!state.enabled;
   $('vlm-state').textContent=!state.enabled?'VLM disabled':state.paused?(state.active?'Paused · current request finishing':'Paused · VLM idle'):state.active?'Running · processing request':'Running · waiting for work';
-  if (state.selected_model && $('bedrock-model')) {
-    if (!modelDirty && document.activeElement !== $('bedrock-model')) $('bedrock-model').value=state.selected_model;
-    $('bedrock-status').textContent=`Active selection: ${state.selected_model.includes('nova-2') ? 'Nova 2 Lite' : 'Nova Lite'} · revision ${state.policy_revision}`;
-    const measured=(state.latencies||[]).filter(row=>row.model===state.selected_model);
+  if (state.selected_model && $('vlm-model-choice')) {
+    if(state.providers)providerCatalog=state.providers;
+    if (!modelDirty && !modelChanging && ![$('vlm-provider'),$('vlm-model-choice')].includes(document.activeElement)) {
+      $('vlm-provider').replaceChildren(...providerCatalog.map(p=>{const o=element('option',p.label);o.value=p.id;return o;}));
+      $('vlm-provider').value=state.selected_provider;
+      modelChoices(state.selected_provider,state.selected_model);
+    }
+    const provider=providerCatalog.find(p=>p.id===state.selected_provider);
+    const model=provider?.models.find(m=>m.id===state.selected_model);
+    $('provider-status').textContent=`Active selection: ${provider?.label||state.selected_provider} · ${model?.label||state.selected_model} · revision ${state.policy_revision}`;
+    const measured=(state.latencies||[]).filter(row=>row.provider===state.selected_provider&&row.model===state.selected_model);
     const latest=measured.at(-1);
-    $('bedrock-latency').textContent=latest ? `${latest.workload.crop_count} crops · p50 ${(latest.p50_ms/1000).toFixed(2)} s · p95 ${(latest.p95_ms/1000).toFixed(2)} s · n=${latest.samples}${latest.samples<20?' · provisional':''}` : 'Waiting for latency measurements';
+    $('provider-latency').textContent=latest ? `${latest.workload.crop_count} crops · p50 ${(latest.p50_ms/1000).toFixed(2)} s · p95 ${(latest.p95_ms/1000).toFixed(2)} s · n=${latest.samples}${latest.samples<20?' · provisional':''}` : 'Waiting for latency measurements';
     const outcomes=state.model_outcomes?.[state.selected_model];
-    if(outcomes)$('bedrock-latency').textContent+=` · ${outcomes.success} valid / ${outcomes.success+outcomes.failed} calls this run`;
+    if(outcomes)$('provider-latency').textContent+=` · ${outcomes.success} valid / ${outcomes.success+outcomes.failed} calls this run`;
     if(state.last_error)$('vlm-state').textContent+=` · ${state.last_error} · backoff ${state.backoff_s.toFixed(1)} s`;
   }
 }
@@ -151,10 +164,22 @@ if ($('apply-capture-interval')) $('apply-capture-interval').onclick=()=>{
   if(!Number.isFinite(interval)||interval<1||interval>86400){$('capture-state').textContent='Choose 1 to 86400 seconds';return;}
   return saveCapture({capture_interval_s:interval});
 };
-if ($('bedrock-model')) $('bedrock-model').onchange=()=>{modelDirty=true;};
-if ($('select-bedrock')) $('select-bedrock').onclick=async()=>{
-  const model=$('bedrock-model').value;vlmGeneration++;$('select-bedrock').disabled=true;
-  try {const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({selected_model:model,model_selection_reason:model.includes('nova-2')?'restore_primary':'latency_fallback'})});if(!r.ok)throw new Error(`Save failed (${r.status})`);modelDirty=false;await vlmStatus();}catch(e){$('bedrock-status').textContent=e.message;}finally{$('select-bedrock').disabled=false;}
+if ($('vlm-provider')) $('vlm-provider').onchange=()=>{modelDirty=true;modelChoices($('vlm-provider').value);};
+if ($('vlm-model-choice')) $('vlm-model-choice').onchange=()=>{modelDirty=true;};
+if ($('select-vlm-model')) $('select-vlm-model').onclick=async()=>{
+  const provider=$('vlm-provider').value,model=$('vlm-model-choice').value;
+  const choice=providerCatalog.find(p=>p.id===provider)?.models.find(m=>m.id===model);
+  if(!choice)return;
+  vlmGeneration++;modelChanging=true;$('select-vlm-model').disabled=true;
+  $('vlm-provider').disabled=true;$('vlm-model-choice').disabled=true;
+  try {
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},
+      body:JSON.stringify({selected_provider:provider,selected_model:model,model_selection_reason:choice.selection_reason})});
+    if(!r.ok)throw new Error(`Save failed (${r.status})`);
+    vlmGeneration++;modelDirty=false;modelChanging=false;await vlmStatus();
+  }catch(e){$('provider-status').textContent=e.message;}finally{
+    modelChanging=false;$('select-vlm-model').disabled=false;$('vlm-provider').disabled=false;$('vlm-model-choice').disabled=false;
+  }
 };
 if ($('capture-observation')) $('capture-observation').onclick=async()=>{
   try {const r=await fetch('/api/camera/observations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw new Error(`Capture failed (${r.status})`);const event=await r.json();$('camera-archive-status').textContent=`Archived frame ${event.frame_id}`;await load();show(event.event_id);}catch(e){$('camera-archive-status').textContent=e.message;}

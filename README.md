@@ -1,8 +1,9 @@
 # RGBGeneralClassifier
 
 The local runner uses an attached **Orbbec Femto Bolt** for color, registered
-depth, and native IR, with **Nova 2 Lite on Amazon Bedrock** through the
-`default` AWS profile. One Python process serves the dashboard and camera API
+depth, and native IR, with **Nova 2 Lite on Amazon Bedrock** by default through
+the `default` AWS profile. **OpenRouter** also supports Nova 2 Lite, Nova Lite,
+and Gemini 2.5 Flash-Lite. One Python process serves the dashboard and camera API
 and keeps an SQLite archive. No Kubernetes, Redis, or Docker is needed.
 
 ```sh
@@ -13,9 +14,19 @@ python3 -m venv .venv
 
 Open `http://127.0.0.1:8080`. Bedrock uses `us-west-2` and
 `us.amazon.nova-2-lite-v1:0`, with reasoning disabled. Camera/API reads do not
-invoke Bedrock. Live detection refinement does, unless paused or started with
+invoke a VLM. Live detection refinement does, unless paused or started with
 `--no-vlm`. The dashboard saves pause, thresholds, display mode, and explicit
 Nova Lite fallback/restoration across restarts.
+
+To use OpenRouter, set `OPENROUTER_API_KEY` in the service environment and run:
+
+```sh
+.venv/bin/python -m rgb.local --provider openrouter --model amazon/nova-2-lite-v1
+```
+
+Select provider and model in the dashboard, or use `--provider bedrock` to
+return to Bedrock. Selections persist. See [provider configuration](docs/local-operations.md#vlm-providers)
+for credentials, supported models, and audit behavior.
 
 See [local operation and API examples](docs/local-operations.md),
 [feature design](docs/local-femto-bedrock-design.md), and

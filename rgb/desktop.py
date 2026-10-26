@@ -227,7 +227,7 @@ def main():
             health, vlm = status['data']['health'], status['data']['vlm']
             camera = health['camera']
             lifecycle = 'Console started service; closing stops it' if status['owned'] else 'Attached; service stays running'
-            model = 'Nova 2 Lite' if 'nova-2' in vlm.get('selected_model', '') else 'Nova Lite'
+            model = f"{vlm.get('selected_provider', 'bedrock')} / {vlm.get('selected_model', 'unknown')}"
             mode = 'disabled' if not vlm['enabled'] else 'paused' if vlm.get('paused') else 'active'
             text = (f"{lifecycle} · Camera {camera.get('state', 'unknown')} "
                     f"({camera.get('capture_fps', 0):.1f} FPS) · {model} {mode} · {controller.url}")

@@ -20,6 +20,65 @@ function setup(){
 const json=body=>({ok:true,json:async()=>body});
 const preventDefault=()=>{};
 
+const providerState=()=>({enabled:true,paused:false,selected_provider:'bedrock',selected_model:'us.amazon.nova-2-lite-v1:0',
+  policy_revision:1,providers:[
+    {id:'bedrock',label:'Amazon Bedrock',models:[{id:'us.amazon.nova-2-lite-v1:0',label:'Nova 2 Lite',selection_reason:'restore_primary'}]},
+    {id:'openrouter',label:'OpenRouter',models:[{id:'amazon/nova-2-lite-v1',label:'Nova 2 Lite',selection_reason:'restore_primary'},
+      {id:'google/gemini-2.5-flash-lite',label:'Gemini 2.5 Flash-Lite',selection_reason:'model_comparison'}]},
+  ]});
+
+test('provider selection sends the provider and model together and survives polling',async()=>{
+  const {context,node}=setup();context.renderVlm(providerState());
+  assert.equal(node('vlm-provider').value,'bedrock');
+  node('vlm-provider').value='openrouter';node('vlm-provider').onchange();
+  assert.equal(node('vlm-model-choice').value,'amazon/nova-2-lite-v1');
+  node('vlm-model-choice').value='google/gemini-2.5-flash-lite';node('vlm-model-choice').onchange();
+  context.renderVlm(providerState());
+  assert.equal(node('vlm-provider').value,'openrouter');
+  assert.equal(node('vlm-model-choice').value,'google/gemini-2.5-flash-lite');
+  let saved;
+  context.fetch=async(url,options)=>{
+    if(options){saved=JSON.parse(options.body);return json(saved);}
+    return json({...providerState(),selected_provider:'openrouter',selected_model:'google/gemini-2.5-flash-lite'});
+  };
+  await node('select-vlm-model').onclick();
+  assert.deepEqual(saved,{selected_provider:'openrouter',selected_model:'google/gemini-2.5-flash-lite',model_selection_reason:'model_comparison'});
+  assert.match(node('provider-status').textContent,/OpenRouter.*Gemini 2.5 Flash-Lite/);
+});
+
+test('failed provider save retains the pending selection',async()=>{
+  const {context,node}=setup();context.renderVlm(providerState());
+  node('vlm-provider').value='openrouter';node('vlm-provider').onchange();
+  context.fetch=async()=>({ok:false,status:400});
+  await node('select-vlm-model').onclick();context.renderVlm(providerState());
+  assert.equal(node('vlm-provider').value,'openrouter');
+  assert.equal(node('vlm-model-choice').value,'amazon/nova-2-lite-v1');
+});
+
+test('status polled during a provider save cannot undo its acknowledgement',async()=>{
+  const {context,node}=setup();context.renderVlm(providerState());
+  node('vlm-provider').value='openrouter';node('vlm-provider').onchange();
+  let saveResolve,statusResolve;
+  context.fetch=async(url,options)=>new Promise(resolve=>{if(options)saveResolve=resolve;else statusResolve=resolve;});
+  const saving=node('select-vlm-model').onclick();const stale=context.vlmStatus();
+  assert.equal(node('vlm-provider').disabled,true);
+  context.fetch=async()=>json({...providerState(),selected_provider:'openrouter',selected_model:'amazon/nova-2-lite-v1'});
+  saveResolve(json({}));await saving;
+  statusResolve(json(providerState()));await stale;
+  assert.equal(node('vlm-provider').value,'openrouter');
+  assert.match(node('provider-status').textContent,/OpenRouter/);
+});
+
+test('provider measurements are never pooled across transports',()=>{
+  const {context,node}=setup();
+  const workload={crop_count:1};
+  context.renderVlm({...providerState(),latencies:[
+    {provider:'bedrock',model:'us.amazon.nova-2-lite-v1:0',workload,p50_ms:1000,p95_ms:2000,samples:10},
+    {provider:'openrouter',model:'us.amazon.nova-2-lite-v1:0',workload,p50_ms:9000,p95_ms:10000,samples:10},
+  ]});
+  assert.match(node('provider-latency').textContent,/p50 1.00 s/);
+});
+
 test('evaluation sends the displayed context, independent of global mode',async()=>{
   const {context}=setup();vm.runInContext("settings={display_mode:'materials'}",context);
   const revision={candidate_revision:'a'.repeat(64),mode:'objects',settings_version:3};

@@ -34,8 +34,10 @@ SCHEMAS['detections']=pa.schema(list(SCHEMAS['detections'])+[('frame_id',pa.stri
 SCHEMAS['model_attempts']=pa.schema(list(SCHEMAS['model_attempts'])+[
     ('frame_id',pa.string()),('session_id',pa.string()),('request_id',pa.string()),
     ('ordered_image_sha256',pa.list_(pa.string())),('inputs_json',pa.string()),
-    ('workload_json',pa.string()),('bedrock_latency_ms',pa.float64()),('capture_age_s',pa.float64())])
-SCHEMAS['settings']=pa.schema(list(SCHEMAS['settings'])+[('selected_model',pa.string()),('model_selection_reason',pa.string())])
+    ('workload_json',pa.string()),('bedrock_latency_ms',pa.float64()),('capture_age_s',pa.float64()),
+    ('resolved_model',pa.string()),('upstream_provider',pa.string()),('cost',pa.float64()),('reasoning_tokens',pa.int64())])
+SCHEMAS['settings']=pa.schema(list(SCHEMAS['settings'])+[
+    ('selected_provider',pa.string()),('selected_model',pa.string()),('model_selection_reason',pa.string())])
 
 
 def timestamp(value):
@@ -72,10 +74,10 @@ def rows(store,table,stops,settings,projections):
             v=json.loads(fields['value'])
             if table=='detection_updates':yield {'stream_id':row,'detection_id':fields['detection_id'],'kind':fields['kind'],'value_json':fields['value']}
             elif table=='model_attempts':
-                yield {**{k:v.get(k) for k in ['attempt_id','job_id','detection_ids','source_id','model','endpoint','latency_ms','outcome','http_status','prompt_tokens','output_tokens','finish_reason','error_type','error','prompt_sha256','prompt','raw_response','frame_id','session_id','request_id','ordered_image_sha256','bedrock_latency_ms','capture_age_s']},'inputs_json':json.dumps(v['inputs']) if 'inputs' in v else None,'workload_json':json.dumps(v['workload']) if 'workload' in v else None,'stream_id':row,'observation_id':v.get('scene_id'),'started_at':timestamp(v.get('started_at')),'finished_at':timestamp(v.get('finished_at')),'value_json':fields['value']}
+                yield {**{k:v.get(k) for k in ['attempt_id','job_id','detection_ids','source_id','model','endpoint','latency_ms','outcome','http_status','prompt_tokens','output_tokens','finish_reason','error_type','error','prompt_sha256','prompt','raw_response','frame_id','session_id','request_id','ordered_image_sha256','bedrock_latency_ms','capture_age_s','resolved_model','upstream_provider','cost','reasoning_tokens']},'inputs_json':json.dumps(v['inputs']) if 'inputs' in v else None,'workload_json':json.dumps(v['workload']) if 'workload' in v else None,'stream_id':row,'observation_id':v.get('scene_id'),'started_at':timestamp(v.get('started_at')),'finished_at':timestamp(v.get('finished_at')),'value_json':fields['value']}
             elif table=='location_updates':yield {'stream_id':row,**{k:v.get(k) for k in ['source_id','version','actor','method','label','latitude','longitude','accuracy_m']},'changed_at':timestamp(v.get('changed_at'))}
             elif table=='analysis_actions':yield {'stream_id':row,'kind':v['kind'],'observation_id':v.get('event_id'),'job_id':v.get('job_id'),'batch_id':v.get('batch_id'),'actor':v.get('actor'),'requested_at':timestamp(v.get('requested_at',v.get('created_at'))),'box_indices':v.get('box_indices'),'value_json':fields['value']}
-            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode','vlm_paused','classification_running','record_observations','selected_model','model_selection_reason']},'changed_at':timestamp(v.get('changed_at'))}
+            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode','vlm_paused','classification_running','record_observations','selected_provider','selected_model','model_selection_reason']},'changed_at':timestamp(v.get('changed_at'))}
             else:yield {'stream_id':row,**{k:v.get(k) for k in ['evaluation_id','detection_id','actor','mode','reference_label','detector_result','vlm_result','notes']},'observation_id':v['scene_id'],'reviewed_at':timestamp(v['reviewed_at']),'value_json':fields['value']}
 
 
@@ -100,7 +102,7 @@ def _build_export(store,format,stops,settings):
             status={'started':'running','success':'read_complete','failed':'failed'}.get(value['outcome'],'unknown')
             projections.execute('UPDATE projection SET status=? WHERE detection_id=?',(status,key))
     projections.commit()
-    manifest={'schema_version':7,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
+    manifest={'schema_version':8,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
     try:
         for name,schema in SCHEMAS.items():
             path=root/(name+'.'+format)

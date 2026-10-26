@@ -67,7 +67,9 @@ than treated as an invitation to launch another service.
 
 The default runner configuration remains profile `default`, region
 `us-west-2`, Nova 2 Lite, and archive `~/.local/share/bolt-rgb`.
-Normal live inference makes paid Bedrock calls. Pass runtime options after
+Normal live inference makes paid calls through the selected VLM provider.
+Bedrock is the default; [OpenRouter setup](local-operations.md#vlm-providers)
+uses `OPENROUTER_API_KEY` in the service environment. Pass runtime options after
 `--` to configure a newly started service:
 
 ```sh

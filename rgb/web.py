@@ -137,7 +137,8 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         data=request.get_json(silent=True)
         allowed=[{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'},{'vlm_paused'}]
         if not local_runtime:allowed.append({'classification_running','record_observations'})
-        if local_runtime:allowed.extend([{'selected_model','model_selection_reason'},{'capture_paused'},
+        if local_runtime:allowed.extend([{'selected_model','model_selection_reason'},
+                                        {'selected_provider','selected_model','model_selection_reason'},{'capture_paused'},
                                         {'capture_interval_s'},{'capture_paused','capture_interval_s'}])
         if not isinstance(data,dict) or set(data) not in allowed:
             return jsonify(error='Expected confidence thresholds, display mode or vlm_paused'),400
@@ -151,10 +152,13 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
                 or not math.isfinite(data['capture_interval_s']) or not 1<=data['capture_interval_s']<=86400):
             return jsonify(error='Capture interval must be 1 to 86400 seconds'),400
         if 'selected_model' in data:
-            from rgb.local_store import PRIMARY_MODEL,FALLBACK_MODEL
-            expected={PRIMARY_MODEL:'restore_primary',FALLBACK_MODEL:'latency_fallback'}
-            if data['selected_model'] not in expected or data['model_selection_reason']!=expected[data['selected_model']]:
-                return jsonify(error='Expected supported model with restore_primary or latency_fallback reason'),400
+            from rgb.vlm_providers import model_selection
+            provider=data.get('selected_provider',store.settings()['selected_provider'])
+            try:_,reason=model_selection(provider,data['selected_model'])
+            except ValueError as exc:return jsonify(error=str(exc)),400
+            if data['model_selection_reason']!=reason:
+                return jsonify(error='Expected supported provider/model with its selection reason'),400
+            data['selected_provider']=provider
         if any(type(data[k]) is not bool for k in ['classification_running','record_observations'] if k in data):return jsonify(error='Classification controls must be boolean'),400
         if not all(type(v) in (int,float) and .05<=v<=.99 for k,v in data.items() if k in {'detector_threshold','vlm_threshold'}):
             return jsonify(error='Thresholds must be between 0.05 and 0.99'),400

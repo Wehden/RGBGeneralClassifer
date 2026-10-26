@@ -15,6 +15,7 @@ import cv2
 import requests
 from flask import Flask, Response, jsonify
 from waitress import serve
+from common.http import OPTIONS as HTTP_OPTIONS
 from board.detector import Detector, overlay
 from board.refinements import match
 from board.tracking import Tracker
@@ -230,4 +231,4 @@ if __name__ == '__main__':
     threading.Thread(target=deliver, daemon=True).start()
     threading.Thread(target=poll_policy, daemon=True).start()
     threading.Thread(target=push_live, daemon=True).start()
-    serve(app, host='0.0.0.0', port=8080, threads=10, channel_timeout=20)
+    serve(app, host='0.0.0.0', port=8080, threads=10, channel_timeout=20, **HTTP_OPTIONS)

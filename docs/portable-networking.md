@@ -31,7 +31,9 @@ and registry expiry together. Renewing its Access credential does not require
 changing its source ID or historical observations.
 
 Live frames stay in process memory, with a 15-second freshness deadline. They
-never enter Redis, image storage, or an observation outbox. The relay currently
+never enter Redis, image storage, or an observation outbox. HTTP request and
+stream buffers are sized to stay in RAM; a real Waitress upload test rejects
+any attempt to spool an accepted live request to a temporary file. The relay currently
 uses one web replica and one Waitress process, matching `deploy/app.yaml`.
 A restart drops the live buffer; new frames refill it. Keep this constraint
 when changing replica count or server process count. History uses private

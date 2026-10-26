@@ -128,3 +128,31 @@ def test_stream_admission_and_stale_disconnect(portable,event,monkeypatch):
         again=stream('unoq')
         assert again.status_code==200
         again.close()
+
+
+def test_large_live_upload_does_not_spool_to_disk(portable,monkeypatch):
+    import io
+    import threading
+    from PIL import Image
+    from waitress import create_server
+    from common.http import OPTIONS
+    c,store=portable
+    jpeg=io.BytesIO()
+    Image.effect_noise((1280,720),100).convert('RGB').save(jpeg,'JPEG',quality=95)
+    raw=jpeg.getvalue()
+    assert 524288<len(raw)<1_125_000
+    payload={'status':{'source_id':'unoq','last_frame':time.time()},'image_b64':base64.b64encode(raw).decode(),'frame_age_s':0}
+    forbidden=Mock(side_effect=AssertionError('Preview data reached a disk buffer'))
+    monkeypatch.setattr('tempfile.TemporaryFile',forbidden)
+    server=create_server(c.application,host='127.0.0.1',port=0,threads=2,**OPTIONS)
+    worker=threading.Thread(target=server.run,daemon=True)
+    worker.start()
+    try:
+        result=requests.post('http://127.0.0.1:'+str(server.effective_port)+'/api/device/unoq/live',json=payload,headers=auth(),timeout=5)
+        assert result.status_code==200
+        assert not list(store.redis.scan_iter('rgb:live:*'))
+        assert not list(store.root.iterdir())
+        forbidden.assert_not_called()
+    finally:
+        server.close()
+        server.task_dispatcher.shutdown()

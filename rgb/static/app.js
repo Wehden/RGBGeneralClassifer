@@ -138,7 +138,7 @@ function renderClassification(s){
   $('classification-state').textContent='Control saved · awaiting Uno Q';
 }
 function acknowledgeClassification(s){
-  if(!desiredClassification||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
+  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
   $('classification-state').textContent=s.classification_running?(s.record_observations?'Running · recording observations':'Running · preview only'):'Paused · camera on';
 }
 async function setClassification(running){

@@ -88,10 +88,13 @@ Latency samples are separated by provider, model, and workload. Export schema
 8 adds provider selection and OpenRouter metadata; historical rows leave
 unavailable fields empty.
 
-Availability was checked against OpenRouter's public catalog. This change has
-automated transport and application tests; it does not establish live latency
-or vision quality through OpenRouter. Compare identical archived image batches
-before changing a production default.
+Availability was checked against OpenRouter's public catalog. A subsequent
+[Stepwise webcam check](local-verification.md#openrouter-on-stepwise-with-a-webcam)
+validated 10/10 actual Nova 2 Lite requests through OpenRouter, with a measured
+1.445-second median call time. This repeated single-scene check does not
+establish general vision quality or compare provider latency on the Bolt's
+images. Compare identical archived image batches before changing a production
+default.
 
 ## Controls and configuration
 

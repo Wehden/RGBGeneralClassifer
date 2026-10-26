@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
@@ -70,6 +71,45 @@ class Store:
         self.root=Path(root)
         self.root.mkdir(parents=True,exist_ok=True)
         self.analysis_enabled=analysis_enabled
+
+    def ping(self):
+        return self.redis.ping()
+
+    def projection(self,key):
+        raw=self.redis.hget('rgb:detections',key)
+        return json.loads(raw) if raw else None
+
+    def opinions(self,event_id):
+        raw=self.redis.hget('rgb:opinions',event_id)
+        return json.loads(raw) if raw else []
+
+    def analysis(self,event_id):
+        raw=self.redis.hget('rgb:analysis',event_id)
+        return json.loads(raw) if raw else {'status':'not_analyzed','schema_version':1}
+
+    def metrics(self):
+        return self.redis.hgetall('rgb:metrics')
+
+    def active_attempt(self):
+        raw=self.redis.get('rgb:vlm:active')
+        return json.loads(raw) if raw else None
+
+    def refinements(self,source_id):
+        raw=self.redis.hget('rgb:refinements',source_id)
+        return json.loads(raw) if raw else None
+
+    def event_rows(self,maximum='+',count=501):
+        return self.redis.xrevrange('rgb:events',max=maximum,count=count)
+
+    @contextmanager
+    def export_snapshot(self,streams):
+        with self.redis.pipeline(transaction=True) as pipe:
+            for key in streams:pipe.xrevrange(key,count=1)
+            pipe.get('rgb:settings')
+            snapshot=pipe.execute()
+        stops={key:(result or [('0-0',{})])[0][0] for key,result in zip(streams,snapshot[:-1])}
+        settings={**DEFAULT_SETTINGS,**(json.loads(snapshot[-1]) if snapshot[-1] else {})}
+        yield self,stops,settings
 
     def settings(self):
         raw=self.redis.get('rgb:settings')
@@ -174,23 +214,20 @@ class Store:
         projected=[]
         for index,d in enumerate(event['detections']):
             key=detection_id(event_id,index)
-            raw=self.redis.hget('rgb:detections',key)
-            projection=json.loads(raw) if raw else {'candidate':None}
+            projection=self.projection(key) or {'candidate':None}
             candidate=projection.get('candidate')
             accepted=bool(candidate and candidate['confidence']>=settings['vlm_threshold'])
             displayed=value(d,candidate,settings)
             context={'candidate_revision':candidate_revision(candidate),'settings_version':settings['version'],'mode':settings['display_mode']}
             projected.append({**d,'detection_id':key,'display_label':displayed['label'],'display_confidence':displayed['confidence'],'label_provider':displayed['provider'],'enhancement':candidate,'enhancement_accepted':accepted,'review_context':context})
         event['detections']=projected
-        opinions=self.redis.hget('rgb:opinions',event_id)
-        event['opinions']=json.loads(opinions) if opinions else []
-        state=self.redis.hget('rgb:analysis',event_id)
-        event['analysis']=json.loads(state) if state else {'status':'not_analyzed','schema_version':1}
+        event['opinions']=self.opinions(event_id)
+        event['analysis']=self.analysis(event_id)
         event['settings']=settings
         return event
 
     def list(self,before=None,limit=50):
-        rows=self.redis.xrevrange('rgb:events',max='('+before if before else '+',count=limit)
+        rows=self.event_rows(maximum='('+before if before else '+',count=limit)
         return [{'cursor':row,**self.get(json.loads(fields['event'])['event_id'])} for row,fields in rows]
 
     def request_analysis(self,event_id,indices=None,request_id=None,actor=None):

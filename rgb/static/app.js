@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
 let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
+const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
+  new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
 const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
 window.addEventListener('pagehide', () => liveVideo.stop());
 window.addEventListener('pageshow', event => { if (event.persisted) live(); });
@@ -8,12 +10,23 @@ function element(tag, text, cls) { const e = document.createElement(tag); if (te
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
 function date(value) { return new Date(value).toLocaleString(); }
 async function status() {
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${s.detections?.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · Uno Q ${s.detector_config?.runtime ?? 'CPU'}`; }
+  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
   catch { $('timing').textContent = 'Camera status unavailable'; }
 }
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
-  liveVideo.start(`/api/live/${encodeURIComponent(s.id)}/stream`);
+  const channel = s.local ? $('camera-channel')?.value ?? 'color' : 'color';
+  const cloud=s.local&&channel==='pointcloud';
+  $('live').hidden=cloud;
+  if($('pointcloud-view'))$('pointcloud-view').hidden=!cloud;
+  if(cloud) {
+    liveVideo.stop();
+    if(pointcloudViewer)pointcloudViewer.start();else $('live-state').textContent='3D viewer unavailable';
+  } else {
+    if(pointcloudViewer)pointcloudViewer.stop();
+    liveVideo.start( s.local && channel !== 'color' ? `/api/camera/${channel}/stream` : `/api/live/${encodeURIComponent(s.id)}/stream`);
+  }
+  if (s.local) { $('snapshot-link').href=cloud?'/api/camera/pointcloud':`/api/camera/${channel}/snapshot.jpg`;$('snapshot-link').textContent=cloud?'Point cloud frame':'Snapshot'; $('raw-link').hidden=channel==='color';const rawChannel=cloud?'depth':channel; $('raw-link').href=`/api/camera/${rawChannel}/raw.png`; $('raw-link').textContent=`Raw 16-bit ${rawChannel}`; }
   $('camera-location').textContent = s.location ? `${s.location} · ${s.location_method}` : 'Location unassigned';
   loadLocation(); status(); clearInterval(timer); timer = setInterval(status, 10000);
 }
@@ -44,16 +57,22 @@ async function show(id, refresh=false) {
     target.append(frame,element('h3',date(event.observed_at)),element('p',`${event.source_id} · ${event.location ?? 'Location unknown'}`,'muted'));
     const state = event.analysis; const progress = state.total_boxes ? ` · ${state.completed_boxes}/${state.total_boxes} boxes` : '';
     target.append(element('p',`Analysis: ${state.status.replaceAll('_',' ')}${progress}`,'analysis-state'));
+    if (event.frame_id) {
+      target.append(element('p',`Frame ${event.frame_id} · Session ${event.session_id}`,'muted'));
+      const evidence=element('a','Download observation evidence');evidence.href=`/api/review/evidence?event_ids=${encodeURIComponent(event.event_id)}`;target.append(evidence);
+      for (const channel of ['depth','ir']) { if (!event.sensor_assets?.[channel+'_preview']) continue; const details=element('details');details.append(element('summary',`${channel === 'depth' ? 'Depth' : 'IR'} preview and raw data`));const img=element('img');img.src=`/api/events/${id}/assets/${channel}_preview`;img.alt=`Archived ${channel} preview`;img.className='sensor-preview';const raw=element('a',`Download raw 16-bit ${channel}`);raw.href=`/api/events/${id}/assets/${channel}_native`;details.append(img,raw);target.append(details); }
+    }
     event.detections.forEach((d,i) => {
       const card = element('section',undefined,'reading'); const c = d.enhancement;
       card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'Qwen'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
+      if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));
       if (event.settings.display_mode === 'materials' && c?.materials) { for (const m of c.materials) { card.append(element('p',`${m.label} · ${(m.confidence*100).toFixed(1)}%`,'comparison'),element('p',m.reason)); } }
       if (c && event.settings.display_mode !== 'materials') { card.append(element('p',`${d.label} → ${c.label} · ${c.comparison}`,'comparison'),element('p',c.reason)); if (!d.enhancement_accepted) card.append(element('p',`VLM ${(c.confidence*100).toFixed(1)}% · threshold ${(event.settings.vlm_threshold*100).toFixed(0)}%`,'muted')); }
       const details = element('details'); const summary = element('summary','Detection history'); const content = element('div',undefined,'detection-history'); details.append(summary,content); details.open = openedHistories.has(d.detection_id);
       details.ontoggle = () => { if (details.open) { openedHistories.add(d.detection_id); history(d,content); } else openedHistories.delete(d.detection_id); };
       const requestButton=element('button','Request VLM for this detection');
       requestButton.onclick=async()=>{requestButton.disabled=true;try {const r=await fetch(`/api/detections/${d.detection_id}/analyze`,{method:'POST',headers:{'X-RGB-Request':'analysis'}});if(!r.ok)throw new Error(`Request failed (${r.status})`);requestButton.textContent='VLM requested'; if(selected===id)await show(id,true);}catch(e){requestButton.textContent=e.message;requestButton.disabled=false;}};
-      if (details.open) history(d,content); card.append(requestButton,details,evaluation(d)); target.append(card);
+      if (details.open) history(d,content); if(!event.frame_id)card.append(requestButton); card.append(details,evaluation(d)); target.append(card);
     });
     for (const opinion of event.opinions.filter(o=>o.kind === 'box_comparisons')) { if (opinion.errors.length) target.append(element('p',`${opinion.model}: ${opinion.errors.map(e=>e.error).join('; ')}`,'muted')); }
     const button = element('button',state.status === 'queued' || state.status === 'running' ? 'Analysis in progress' : 'Analyze detections'); button.disabled = ['queued','running','disabled'].includes(state.status);
@@ -77,17 +96,69 @@ $('mode').onchange=async () => { const mode=$('mode').value; $('mode').disabled=
 $('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('source').onchange = live;
 (async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
 
-let vlmPaused=false,vlmChanging=false,vlmGeneration=0;
+let vlmPaused=false,vlmChanging=false,vlmGeneration=0,modelDirty=false;
+let capturePaused=false,captureChanging=false,captureGeneration=0,captureIntervalDirty=false;
+function renderCapture(state) {
+  const capture=state.capture;
+  if(!capture||!$('pause-capture'))return;
+  capturePaused=capture.paused;
+  $('pause-capture').textContent=capturePaused?'Resume capture':'Pause capture';
+  $('pause-capture').disabled=captureChanging;
+  if(!captureIntervalDirty&&document.activeElement!==$('capture-interval'))$('capture-interval').value=capture.interval_s;
+  $('capture-state').textContent=capturePaused?'Capture paused · live views continue':`Automatic capture every ${capture.interval_s}s · next in ${Math.ceil(capture.next_in_s??0)}s`;
+  if(state.storage?.observations>0&&!$('events').children.length)load();
+}
 function renderVlm(state) {
   vlmPaused=state.paused;
   $('vlm-model').textContent=`Label refinement: ${(state.models||[]).join(', ')||'Disabled'}`;
   $('pause-vlm').textContent=state.paused?'Resume VLM':'Pause VLM';
   $('pause-vlm').disabled=vlmChanging||!state.enabled;
   $('vlm-state').textContent=!state.enabled?'VLM disabled':state.paused?(state.active?'Paused · current request finishing':'Paused · VLM idle'):state.active?'Running · processing request':'Running · waiting for work';
+  if (state.selected_model && $('bedrock-model')) {
+    if (!modelDirty && document.activeElement !== $('bedrock-model')) $('bedrock-model').value=state.selected_model;
+    $('bedrock-status').textContent=`Active selection: ${state.selected_model.includes('nova-2') ? 'Nova 2 Lite' : 'Nova Lite'} · revision ${state.policy_revision}`;
+    const measured=(state.latencies||[]).filter(row=>row.model===state.selected_model);
+    const latest=measured.at(-1);
+    $('bedrock-latency').textContent=latest ? `${latest.workload.crop_count} crops · p50 ${(latest.p50_ms/1000).toFixed(2)} s · p95 ${(latest.p95_ms/1000).toFixed(2)} s · n=${latest.samples}${latest.samples<20?' · provisional':''}` : 'Waiting for latency measurements';
+    const outcomes=state.model_outcomes?.[state.selected_model];
+    if(outcomes)$('bedrock-latency').textContent+=` · ${outcomes.success} valid / ${outcomes.success+outcomes.failed} calls this run`;
+    if(state.last_error)$('vlm-state').textContent+=` · ${state.last_error} · backoff ${state.backoff_s.toFixed(1)} s`;
+  }
 }
-async function vlmStatus(){const generation=vlmGeneration;try {const state=await get('/api/vlm/status');if(!vlmChanging&&generation===vlmGeneration)renderVlm(state);}catch(e){if(generation===vlmGeneration)$('vlm-state').textContent=`VLM status unavailable: ${e.message}`;}}
+async function vlmStatus(){const generation=vlmGeneration,captureRevision=captureGeneration;try {const state=await get('/api/vlm/status');if(!vlmChanging&&generation===vlmGeneration)renderVlm(state);if(!captureChanging&&captureRevision===captureGeneration)renderCapture(state);}catch(e){if(generation===vlmGeneration)$('vlm-state').textContent=`VLM status unavailable: ${e.message}`;}}
 $('pause-vlm').onclick=async()=>{vlmChanging=true;vlmGeneration++;$('pause-vlm').disabled=true;try {const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({vlm_paused:!vlmPaused})});if(!r.ok)throw new Error(`Save failed (${r.status})`);const saved=await r.json();vlmPaused=saved.vlm_paused;$('pause-vlm').textContent=vlmPaused?'Resume VLM':'Pause VLM';vlmChanging=false;await vlmStatus();}catch(e){$('vlm-state').textContent=e.message;}finally{vlmChanging=false;$('pause-vlm').disabled=false;}};
 vlmStatus();setInterval(vlmStatus,2000);
+if ($('camera-channel')) $('camera-channel').onchange=live;
+if ($('reset-pointcloud')) $('reset-pointcloud').onclick=()=>pointcloudViewer?.reset();
+if ($('pointcloud-color')) $('pointcloud-color').onchange=()=>pointcloudViewer?.setColor($('pointcloud-color').value);
+window.addEventListener('pagehide',()=>pointcloudViewer?.stop());
+async function saveCapture(values) {
+  captureChanging=true;captureGeneration++;$('pause-capture').disabled=true;$('apply-capture-interval').disabled=true;
+  try {
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify(values)});
+    if(!r.ok){let message=`Save failed (${r.status})`;try{message=(await r.json()).error||message;}catch{}throw new Error(message);}
+    const saved=await r.json();capturePaused=saved.capture_paused;
+    if('capture_interval_s' in values)captureIntervalDirty=false;
+    captureChanging=false;renderCapture({capture:{paused:saved.capture_paused,interval_s:saved.capture_interval_s}});
+    await vlmStatus();
+  } catch(error) {$('capture-state').textContent=error.message;}
+  finally {captureChanging=false;$('pause-capture').disabled=false;$('apply-capture-interval').disabled=false;}
+}
+if ($('pause-capture')) $('pause-capture').onclick=()=>saveCapture({capture_paused:!capturePaused});
+if ($('capture-interval')) $('capture-interval').oninput=()=>{captureIntervalDirty=true;};
+if ($('apply-capture-interval')) $('apply-capture-interval').onclick=()=>{
+  const interval=Number($('capture-interval').value);
+  if(!Number.isFinite(interval)||interval<1||interval>86400){$('capture-state').textContent='Choose 1 to 86400 seconds';return;}
+  return saveCapture({capture_interval_s:interval});
+};
+if ($('bedrock-model')) $('bedrock-model').onchange=()=>{modelDirty=true;};
+if ($('select-bedrock')) $('select-bedrock').onclick=async()=>{
+  const model=$('bedrock-model').value;vlmGeneration++;$('select-bedrock').disabled=true;
+  try {const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({selected_model:model,model_selection_reason:model.includes('nova-2')?'restore_primary':'latency_fallback'})});if(!r.ok)throw new Error(`Save failed (${r.status})`);modelDirty=false;await vlmStatus();}catch(e){$('bedrock-status').textContent=e.message;}finally{$('select-bedrock').disabled=false;}
+};
+if ($('capture-observation')) $('capture-observation').onclick=async()=>{
+  try {const r=await fetch('/api/camera/observations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!r.ok)throw new Error(`Capture failed (${r.status})`);const event=await r.json();$('camera-archive-status').textContent=`Archived frame ${event.frame_id}`;await load();show(event.event_id);}catch(e){$('camera-archive-status').textContent=e.message;}
+};
 
 async function loadLocation() {
   const sourceId=$('source').value;
@@ -115,7 +186,7 @@ $('browser-location').onclick=()=>{
 };
 
 
-$('catch-up').onclick=async()=>{
+if ($('catch-up')) $('catch-up').onclick=async()=>{
   const source_id=$('source').value;
   $('catch-up').disabled=true;
   let batch_id;
@@ -152,6 +223,6 @@ async function setClassification(running){
   }catch(e){$('classification-state').textContent=e.message;}
   finally{$('classification-toggle').disabled=false;}
 }
-$('classification-toggle').onclick=()=>setClassification(!classificationRunning);
-$('classification-mode').onchange=()=>setClassification(classificationRunning);
-get('/api/settings').then(renderClassification).catch(e=>{$('classification-state').textContent=e.message;});
+if ($('classification-toggle')) $('classification-toggle').onclick=()=>setClassification(!classificationRunning);
+if ($('classification-mode')) $('classification-mode').onchange=()=>setClassification(classificationRunning);
+if ($('classification-toggle')) get('/api/settings').then(renderClassification).catch(e=>{$('classification-state').textContent=e.message;});

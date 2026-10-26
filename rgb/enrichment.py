@@ -3,6 +3,7 @@ import base64
 import io
 import hashlib
 import json
+import math
 import logging
 import threading
 import time
@@ -20,6 +21,11 @@ VERDICTS={'agrees','refines','disagrees','uncertain'}
 SCHEMA={'type':'object','properties':{'observations':{'type':'array','items':{'type':'object','properties':{'box_index':{'type':'integer'},'label':{'type':'string'},'confidence':{'type':'number','minimum':0,'maximum':1},'comparison':{'type':'string','enum':sorted(VERDICTS)},'reason':{'type':'string'}},'required':['box_index','label','confidence','comparison','reason'],'additionalProperties':False}}},'required':['observations'],'additionalProperties':False}
 SCHEMA['properties']['observations']['items']['properties']['materials']={'type':'array','maxItems':8,'items':{'type':'object','properties':{'label':{'type':'string'},'confidence':{'type':'number','minimum':0,'maximum':1},'reason':{'type':'string'}},'required':['label','confidence','reason'],'additionalProperties':False}}
 SCHEMA['properties']['observations']['items']['required'].append('materials')
+for fields,limits in [
+    (SCHEMA['properties']['observations']['items']['properties'],{'label':120,'reason':1500}),
+    (SCHEMA['properties']['observations']['items']['properties']['materials']['items']['properties'],{'label':80,'reason':1500}),
+]:
+    for field,limit in limits.items():fields[field].update(minLength=1,maxLength=limit)
 
 
 class AnalysisPaused(Exception):
@@ -103,25 +109,39 @@ def read_boxes(endpoint,event,full,items,store=None,job_id=None):
 
 def validate_readings(payload,items):
     if payload.get('done_reason')=='length':raise ValueError('Model output limit reached')
-    observations=json.loads(payload['message']['content'])['observations']
+    text=payload['message']['content'].strip()
+    if text.startswith('```') and text.endswith('```'):
+        lines=text.splitlines()
+        if lines[0] not in {'```','```json'}:raise ValueError('Invalid JSON fence')
+        text='\n'.join(lines[1:-1])
+    def unique_object(pairs):
+        result={}
+        for key,value in pairs:
+            if key in result:raise ValueError('Duplicate JSON key')
+            result[key]=value
+        return result
+    parsed=json.loads(text,object_pairs_hook=unique_object)
+    if not isinstance(parsed,dict) or set(parsed)!={'observations'}:raise ValueError('Invalid root fields')
+    observations=parsed['observations']
     if not isinstance(observations,list):raise ValueError('Invalid observation list')
     expected={i['index'] for i in items}
     seen=set()
     validated=[]
     for item in observations:
+        if not isinstance(item,dict) or set(item)!={'box_index','label','confidence','comparison','reason','materials'}:raise ValueError('Invalid observation fields')
         index=item['box_index']
         confidence=item['confidence']
         if type(index) is not int or index not in expected or index in seen:raise ValueError('Mismatched box index')
-        if not isinstance(item['label'],str) or not 1<=len(item['label'].strip())<=120:raise ValueError('Invalid label')
-        if type(confidence) not in (int,float) or not 0<=confidence<=1:raise ValueError('Invalid confidence')
-        if item['comparison'] not in VERDICTS or not isinstance(item['reason'],str) or not 1<=len(item['reason'])<=1500:raise ValueError('Invalid comparison')
+        if not isinstance(item['label'],str) or not item['label'].strip() or not 1<=len(item['label'])<=120:raise ValueError('Invalid label')
+        if type(confidence) not in (int,float) or not math.isfinite(confidence) or not 0<=confidence<=1:raise ValueError('Invalid confidence')
+        if not isinstance(item['comparison'],str) or item['comparison'] not in VERDICTS or not isinstance(item['reason'],str) or not item['reason'].strip() or not 1<=len(item['reason'])<=1500:raise ValueError('Invalid comparison')
         materials=item['materials']
         if not isinstance(materials,list) or len(materials)>8:raise ValueError('Invalid materials')
         for material in materials:
             if not isinstance(material,dict) or set(material)!={'label','confidence','reason'}:raise ValueError('Invalid material fields')
-            if not isinstance(material['label'],str) or not 1<=len(material['label'].strip())<=80:raise ValueError('Invalid material label')
-            if type(material['confidence']) not in (int,float) or not 0<=material['confidence']<=1:raise ValueError('Invalid material confidence')
-            if not isinstance(material['reason'],str) or not 1<=len(material['reason'])<=1500:raise ValueError('Invalid material reason')
+            if not isinstance(material['label'],str) or not material['label'].strip() or not 1<=len(material['label'])<=80:raise ValueError('Invalid material label')
+            if type(material['confidence']) not in (int,float) or not math.isfinite(material['confidence']) or not 0<=material['confidence']<=1:raise ValueError('Invalid material confidence')
+            if not isinstance(material['reason'],str) or not material['reason'].strip() or not 1<=len(material['reason'])<=1500:raise ValueError('Invalid material reason')
         seen.add(index)
         validated.append({k:item[k] for k in ['box_index','label','confidence','comparison','reason','materials']})
     if seen!=expected:raise ValueError('Missing box reading')

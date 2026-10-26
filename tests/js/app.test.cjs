@@ -13,7 +13,7 @@ class Element {
 }
 function setup(){
   const nodes=new Map();
-  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
+  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){this.url=null;} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
   vm.runInContext(fs.readFileSync('rgb/static/app.js','utf8'),context);
   return {context,node:id=>context.document.getElementById(id)};
 }
@@ -98,6 +98,43 @@ test('a pre-pause status response cannot overwrite the confirmed paused state',a
   assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
 });
 
+test('capture pause remains separate from VLM pause and keeps manual capture available',async()=>{
+  const {context,node}=setup();
+  context.renderCapture({capture:{paused:false,interval_s:60,next_in_s:20}});
+  let saved;
+  context.fetch=async(url,options)=>{
+    if(options){saved=JSON.parse(options.body);return json({capture_paused:true,capture_interval_s:60});}
+    return json({enabled:true,paused:false,capture:{paused:true,interval_s:60,next_in_s:null}});
+  };
+  await node('pause-capture').onclick();
+  assert.deepEqual(saved,{capture_paused:true});
+  assert.equal(node('pause-capture').textContent,'Resume capture');
+  assert.match(node('capture-state').textContent,/live views continue/);
+  assert.equal(node('pause-vlm').textContent,'Pause VLM');
+  assert.notEqual(node('capture-observation').disabled,true);
+});
+
+test('a stale status cannot undo capture pause; edited intervals survive polling',async()=>{
+  const {context,node}=setup();let resolve;
+  context.fetch=()=>new Promise(r=>{resolve=r;});
+  const stale=context.vlmStatus();
+  context.fetch=async(url,options)=>json(options?{capture_paused:true,capture_interval_s:60}:
+    {enabled:true,paused:false,capture:{paused:true,interval_s:60}});
+  await node('pause-capture').onclick();
+  resolve(json({enabled:true,paused:false,capture:{paused:false,interval_s:60}}));await stale;
+  assert.equal(node('pause-capture').textContent,'Resume capture');
+  node('capture-interval').value='300';node('capture-interval').oninput();
+  context.renderCapture({capture:{paused:true,interval_s:60}});
+  assert.equal(node('capture-interval').value,'300');
+});
+
+test('capture interval input validation avoids an invalid settings request',async()=>{
+  const {context,node}=setup();let calls=0;
+  context.fetch=async()=>{calls++;return json({});};
+  node('capture-interval').value='0';await node('apply-capture-interval').onclick();
+  assert.equal(calls,0);assert.match(node('capture-state').textContent,/1 to 86400/);
+});
+
 test('local classification preview sends no-recording policy independently of VLM',async()=>{
   const {context,node}=setup();
   node('classification-mode').value='preview';
@@ -130,6 +167,21 @@ test('healthy camera status cannot hide a stalled image connection',async()=>{
   context.fetch=async()=>json({inference_ms:320});await context.status();
   assert.equal(node('live-state').textContent,'Stale · showing last frame · reconnecting');
   assert.equal(vm.runInContext('liveVideo.url',context),'/api/live/unoq/stream');
+});
+
+test('local depth and IR use recoverable streams; switching to 3D releases the stream',()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'femto-bolt',local:true}]",context);
+  node('source').value='femto-bolt';node('camera-channel').value='depth';
+  context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/camera/depth/stream');
+  node('camera-channel').value='pointcloud';context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),null);
+  assert.equal(node('live').hidden,true);
+  node('camera-channel').value='ir';context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/camera/ir/stream');
+  assert.equal(node('live').hidden,false);
+  assert.equal(node('pointcloud-view').hidden,true);
 });
 
 test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{

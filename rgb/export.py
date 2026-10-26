@@ -12,6 +12,10 @@ from rgb.store import detection_id, now
 from common.display import value
 
 T=pa.timestamp('us',tz='UTC')
+DEPTH=pa.struct([('basis',pa.string()),('status',pa.string()),('valid_samples',pa.int64()),
+                 ('roi_pixels',pa.int64()),('valid_fraction',pa.float64()),('median_m',pa.float64()),
+                 ('p10_m',pa.float64()),('p90_m',pa.float64()),('bounds_xyxy',pa.list_(pa.int32(),4)),
+                 ('minimum_valid_samples',pa.int32())])
 SCHEMAS={
  'observations':pa.schema([('observation_id',pa.string()),('source_id',pa.string()),('observed_at',T),('received_at',T),('location',pa.string()),('location_method',pa.string()),('location_version',pa.int64()),('latitude',pa.float64()),('longitude',pa.float64()),('location_accuracy_m',pa.float64()),('image_sha256',pa.string()),('detector_model',pa.string()),('detector_sha256',pa.string()),('detector_config_json',pa.string()),('capture_threshold',pa.float64()),('capture_settings_version',pa.int64()),('automatic_vlm',pa.bool_()),('capture_vlm_paused',pa.bool_()),('analysis_policy_version',pa.int64()),('detector_proposals_json',pa.string())]),
  'detections':pa.schema([('detection_id',pa.string()),('track_id',pa.string()),('observation_id',pa.string()),('source_id',pa.string()),('observed_at',T),('display_mode',pa.string()),('box_index',pa.int32()),('ymin',pa.float64()),('xmin',pa.float64()),('ymax',pa.float64()),('xmax',pa.float64()),('initial_label',pa.string()),('initial_label_kind',pa.string()),('initial_class_id',pa.int32()),('initial_confidence',pa.float64()),('enhanced_label',pa.string()),('enhanced_confidence',pa.float64()),('display_label',pa.string()),('display_confidence',pa.float64()),('display_provider',pa.string()),('comparison',pa.string()),('reason',pa.string()),('model',pa.string()),('attempt_id',pa.string()),('vlm_threshold',pa.float64()),('settings_version',pa.int64()),('analysis_status',pa.string()),('live_label',pa.string()),('live_display_mode',pa.string()),('live_match_method',pa.string()),('live_confidence',pa.float64()),('live_reference_detection_id',pa.string()),('live_match_iou',pa.float64()),('live_hash_distance',pa.int32()),('live_age_s',pa.float64())]),
@@ -23,6 +27,15 @@ SCHEMAS={
  'settings':pa.schema([('stream_id',pa.string()),('version',pa.int64()),('changed_at',T),('actor',pa.string()),('detector_threshold',pa.float64()),('vlm_threshold',pa.float64()),('display_mode',pa.string()),('vlm_paused',pa.bool_()),('classification_running',pa.bool_()),('record_observations',pa.bool_())]),
  'analysis_actions':pa.schema([('stream_id',pa.string()),('kind',pa.string()),('observation_id',pa.string()),('job_id',pa.string()),('batch_id',pa.string()),('actor',pa.string()),('requested_at',T),('box_indices',pa.list_(pa.int32())),('value_json',pa.string())]),
  'evaluations':pa.schema([('stream_id',pa.string()),('evaluation_id',pa.string()),('detection_id',pa.string()),('observation_id',pa.string()),('reviewed_at',T),('actor',pa.string()),('mode',pa.string()),('reference_label',pa.string()),('detector_result',pa.string()),('vlm_result',pa.string()),('notes',pa.string()),('value_json',pa.string())])}
+SCHEMAS['observations']=pa.schema(list(SCHEMAS['observations'])+[
+    ('frame_id',pa.string()),('session_id',pa.string()),('calibration_sha256',pa.string()),
+    ('depth_scale_mm',pa.float64()),('frame_metadata_json',pa.string()),('sensor_assets_json',pa.string())])
+SCHEMAS['detections']=pa.schema(list(SCHEMAS['detections'])+[('frame_id',pa.string()),('depth',DEPTH)])
+SCHEMAS['model_attempts']=pa.schema(list(SCHEMAS['model_attempts'])+[
+    ('frame_id',pa.string()),('session_id',pa.string()),('request_id',pa.string()),
+    ('ordered_image_sha256',pa.list_(pa.string())),('inputs_json',pa.string()),
+    ('workload_json',pa.string()),('bedrock_latency_ms',pa.float64()),('capture_age_s',pa.float64())])
+SCHEMAS['settings']=pa.schema(list(SCHEMAS['settings'])+[('selected_model',pa.string()),('model_selection_reason',pa.string())])
 
 
 def timestamp(value):
@@ -34,12 +47,11 @@ def rows(store,table,stops,settings,projections):
         for row,fields in store.stream('rgb:events',stops['rgb:events']):
             raw=json.loads(fields['event'])
             if table=='legacy_opinions':
-                opinions=store.redis.hget('rgb:opinions',raw['event_id'])
-                for opinion in json.loads(opinions) if opinions else []:
+                for opinion in store.opinions(raw['event_id']):
                     if opinion.get('kind')!='box_comparisons':yield {'observation_id':raw['event_id'],'source_id':raw['source_id'],**{k:opinion.get(k) for k in ['model','endpoint','status','text','reason','error']},'observed_at':timestamp(opinion.get('observed_at')),'value_json':json.dumps(opinion)}
             elif table=='observations':
                 d=raw['detector']
-                yield dict(observation_id=raw['event_id'],source_id=raw['source_id'],observed_at=timestamp(raw['observed_at']),received_at=timestamp(raw['received_at']),location=raw['location'],location_method=raw.get('location_record',{}).get('method'),location_version=raw.get('location_record',{}).get('version'),latitude=raw.get('location_record',{}).get('latitude'),longitude=raw.get('location_record',{}).get('longitude'),location_accuracy_m=raw.get('location_record',{}).get('accuracy_m'),image_sha256=raw['image_sha256'],detector_model=d['model'],detector_sha256=d['sha256'],detector_config_json=json.dumps(d['config'],sort_keys=True) if 'config' in d else None,capture_threshold=d.get('threshold'),capture_settings_version=d.get('settings_version'),automatic_vlm=raw.get('analysis_policy',{}).get('automatic'),capture_vlm_paused=raw.get('analysis_policy',{}).get('vlm_paused'),analysis_policy_version=raw.get('analysis_policy',{}).get('settings_version'),detector_proposals_json=json.dumps(raw.get('detector_proposals',[])))
+                yield dict(observation_id=raw['event_id'],source_id=raw['source_id'],observed_at=timestamp(raw['observed_at']),received_at=timestamp(raw['received_at']),location=raw['location'],location_method=raw.get('location_record',{}).get('method'),location_version=raw.get('location_record',{}).get('version'),latitude=raw.get('location_record',{}).get('latitude'),longitude=raw.get('location_record',{}).get('longitude'),location_accuracy_m=raw.get('location_record',{}).get('accuracy_m'),image_sha256=raw['image_sha256'],detector_model=d['model'],detector_sha256=d['sha256'],detector_config_json=json.dumps(d['config'],sort_keys=True) if 'config' in d else None,capture_threshold=d.get('threshold'),capture_settings_version=d.get('settings_version'),frame_id=raw.get('frame_id'),session_id=raw.get('session_id'),calibration_sha256=raw.get('frame_metadata',{}).get('calibration_sha256'),depth_scale_mm=raw.get('frame_metadata',{}).get('depth_scale_mm'),frame_metadata_json=json.dumps(raw['frame_metadata']) if 'frame_metadata' in raw else None,sensor_assets_json=json.dumps(raw['sensor_assets']) if 'sensor_assets' in raw else None,automatic_vlm=raw.get('analysis_policy',{}).get('automatic'),capture_vlm_paused=raw.get('analysis_policy',{}).get('vlm_paused'),analysis_policy_version=raw.get('analysis_policy',{}).get('settings_version'),detector_proposals_json=json.dumps(raw.get('detector_proposals',[])))
             else:
                 event=raw
                 for i,d in enumerate(event['detections']):
@@ -53,32 +65,30 @@ def rows(store,table,stops,settings,projections):
                         for j,m in enumerate(c.get('materials',[])):
                             yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),provider='vlm',material_index=j,label=m['label'],confidence=m['confidence'],reason=m['reason'],accepted=m['confidence']>=settings['vlm_threshold'],model=c.get('model'),attempt_id=c.get('attempt_id'))
                         continue
-                    yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),display_mode=settings['display_mode'],observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),box_index=i,ymin=d['box'][0],xmin=d['box'][1],ymax=d['box'][2],xmax=d['box'][3],initial_label=d['label'],initial_label_kind=d.get('label_kind','object'),initial_class_id=d['class_id'],initial_confidence=d['confidence'],enhanced_label=c.get('label'),enhanced_confidence=c.get('confidence'),display_label=displayed['label'],display_confidence=displayed['confidence'],display_provider=displayed['provider'],comparison=c.get('comparison'),reason=c.get('reason'),model=c.get('model'),attempt_id=c.get('attempt_id'),vlm_threshold=settings['vlm_threshold'],settings_version=settings['version'],analysis_status=projection[1] if projection else 'not_analyzed',live_label=d.get('live_value',{}).get('display_label',d.get('live_value',{}).get('label')),live_display_mode=d.get('live_value',{}).get('display_mode'),live_match_method=d.get('live_value',{}).get('match_method'),live_confidence=d.get('live_value',{}).get('display_confidence',d.get('live_value',{}).get('confidence')),live_reference_detection_id=d.get('live_value',{}).get('detection_id'),live_match_iou=d.get('live_value',{}).get('match_iou'),live_hash_distance=d.get('live_value',{}).get('match_hash_distance'),live_age_s=d.get('live_value',{}).get('match_age_s'))
+                    yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),display_mode=settings['display_mode'],observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),box_index=i,ymin=d['box'][0],xmin=d['box'][1],ymax=d['box'][2],xmax=d['box'][3],initial_label=d['label'],initial_label_kind=d.get('label_kind','object'),initial_class_id=d['class_id'],initial_confidence=d['confidence'],enhanced_label=c.get('label'),enhanced_confidence=c.get('confidence'),display_label=displayed['label'],display_confidence=displayed['confidence'],display_provider=displayed['provider'],comparison=c.get('comparison'),reason=c.get('reason'),model=c.get('model'),attempt_id=c.get('attempt_id'),vlm_threshold=settings['vlm_threshold'],settings_version=settings['version'],analysis_status=projection[1] if projection else 'not_analyzed',live_label=d.get('live_value',{}).get('display_label',d.get('live_value',{}).get('label')),live_display_mode=d.get('live_value',{}).get('display_mode'),live_match_method=d.get('live_value',{}).get('match_method'),live_confidence=d.get('live_value',{}).get('display_confidence',d.get('live_value',{}).get('confidence')),live_reference_detection_id=d.get('live_value',{}).get('detection_id'),live_match_iou=d.get('live_value',{}).get('match_iou'),live_hash_distance=d.get('live_value',{}).get('match_hash_distance'),live_age_s=d.get('live_value',{}).get('match_age_s'),frame_id=event.get('frame_id'),depth=d.get('depth'))
     else:
         key={'detection_updates':'rgb:detection-updates','model_attempts':'rgb:model-attempts','settings':'rgb:settings-updates','evaluations':'rgb:evaluations','location_updates':'rgb:location-updates','analysis_actions':'rgb:analysis-actions'}[table]
         for row,fields in store.stream(key,stops[key]):
             v=json.loads(fields['value'])
             if table=='detection_updates':yield {'stream_id':row,'detection_id':fields['detection_id'],'kind':fields['kind'],'value_json':fields['value']}
             elif table=='model_attempts':
-                yield {**{k:v.get(k) for k in ['attempt_id','job_id','detection_ids','source_id','model','endpoint','latency_ms','outcome','http_status','prompt_tokens','output_tokens','finish_reason','error_type','error','prompt_sha256','prompt','raw_response']},'stream_id':row,'observation_id':v.get('scene_id'),'started_at':timestamp(v.get('started_at')),'finished_at':timestamp(v.get('finished_at')),'value_json':fields['value']}
+                yield {**{k:v.get(k) for k in ['attempt_id','job_id','detection_ids','source_id','model','endpoint','latency_ms','outcome','http_status','prompt_tokens','output_tokens','finish_reason','error_type','error','prompt_sha256','prompt','raw_response','frame_id','session_id','request_id','ordered_image_sha256','bedrock_latency_ms','capture_age_s']},'inputs_json':json.dumps(v['inputs']) if 'inputs' in v else None,'workload_json':json.dumps(v['workload']) if 'workload' in v else None,'stream_id':row,'observation_id':v.get('scene_id'),'started_at':timestamp(v.get('started_at')),'finished_at':timestamp(v.get('finished_at')),'value_json':fields['value']}
             elif table=='location_updates':yield {'stream_id':row,**{k:v.get(k) for k in ['source_id','version','actor','method','label','latitude','longitude','accuracy_m']},'changed_at':timestamp(v.get('changed_at'))}
             elif table=='analysis_actions':yield {'stream_id':row,'kind':v['kind'],'observation_id':v.get('event_id'),'job_id':v.get('job_id'),'batch_id':v.get('batch_id'),'actor':v.get('actor'),'requested_at':timestamp(v.get('requested_at',v.get('created_at'))),'box_indices':v.get('box_indices'),'value_json':fields['value']}
-            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode','vlm_paused','classification_running','record_observations']},'changed_at':timestamp(v.get('changed_at'))}
+            elif table=='settings':yield {'stream_id':row,**{k:v.get(k) for k in ['version','actor','detector_threshold','vlm_threshold','display_mode','vlm_paused','classification_running','record_observations','selected_model','model_selection_reason']},'changed_at':timestamp(v.get('changed_at'))}
             else:yield {'stream_id':row,**{k:v.get(k) for k in ['evaluation_id','detection_id','actor','mode','reference_label','detector_result','vlm_result','notes']},'observation_id':v['scene_id'],'reviewed_at':timestamp(v['reviewed_at']),'value_json':fields['value']}
 
 
 def build_export(store,format):
+    streams=['rgb:events','rgb:detection-updates','rgb:model-attempts','rgb:settings-updates','rgb:evaluations','rgb:location-updates','rgb:analysis-actions']
+    with store.export_snapshot(streams) as (snapshot,stops,settings):
+        return _build_export(snapshot,format,stops,settings)
+
+
+def _build_export(store,format,stops,settings):
     if format not in {'parquet','arrow'}:raise ValueError('Unknown export format')
     directory=tempfile.TemporaryDirectory(prefix='rgb-export-')
     root=Path(directory.name)
-    streams=['rgb:events','rgb:detection-updates','rgb:model-attempts','rgb:settings-updates','rgb:evaluations','rgb:location-updates','rgb:analysis-actions']
-    with store.redis.pipeline(transaction=True) as pipe:
-        for key in streams:pipe.xrevrange(key,count=1)
-        pipe.get('rgb:settings')
-        snapshot=pipe.execute()
-    stops={key:(result or [('0-0',{})])[0][0] for key,result in zip(streams,snapshot[:-1])}
-    from rgb.store import DEFAULT_SETTINGS
-    settings={**DEFAULT_SETTINGS,**(json.loads(snapshot[-1]) if snapshot[-1] else {})}
     projections=sqlite3.connect(root/'projection.sqlite3')
     projections.execute('CREATE TABLE projection (detection_id TEXT PRIMARY KEY,candidate TEXT,status TEXT)')
     for _,fields in store.stream('rgb:detection-updates',stops['rgb:detection-updates']):

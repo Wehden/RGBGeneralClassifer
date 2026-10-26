@@ -7,6 +7,8 @@ build of `board/Dockerfile` inside an app-scoped Arduino App Lab custom brick.
 The cluster remains responsible for Redis, image storage, the web dashboard,
 and optional VLM inference. No vision-model download occurs during startup.
 
+Current installed artifacts and measured acceptance are in the [2026-10-26 receipt](portable-acceptance-20261026.md).
+
 The Portenta X8 at 192.168.1.231 is paused for the user's active-cooling work.
 Its RGB images, runtime file, outbox, and original bird rollback containers are
 retained. Do not restart the unbounded X8 experiment during this work. The
@@ -63,7 +65,7 @@ docker build -f board/Dockerfile -t rgb-classifier:unoq-RELEASE .
 Copy `deploy/unoq/` to `/home/arduino/ArduinoApps/rgbclassifier`, set the custom
 brick's image to the tested native image, and provision a private
 `/home/arduino/rgb-classifier/runtime.env` (mode 0600) plus an owner-writable
-`data/` directory. Use `SOURCE_ID=unoq`, the cluster's ingest token,
+`data/` directory. Use `SOURCE_ID=unoq`, the dedicated source bearer and Access credential,
 `ARCHIVE_URL=https://rgb.wehden.com`, and `OUTBOX_DB=/data/outbox.sqlite3`.
 The current native image tag is recorded in the verification receipt.
 

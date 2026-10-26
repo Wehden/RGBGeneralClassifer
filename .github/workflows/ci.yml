@@ -41,7 +41,8 @@ jobs:
       - name: Install browser test dependencies
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # Hosted Ubuntu runners already provide Chromium runtime libraries.
+          npx playwright install --only-shell chromium
       - name: Exercise live video recovery in Chromium
         run: npm run test:browser
       - name: Verify pinned model

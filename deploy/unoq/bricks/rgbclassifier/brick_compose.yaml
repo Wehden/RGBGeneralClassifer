@@ -1,6 +1,6 @@
 services:
   detector:
-    image: rgb-classifier:unoq-yoloe26n-20261025-v2
+    image: rgb-classifier:unoq-portable-materials-20261026-v4
     restart: unless-stopped
     environment:
       DETECTOR_BACKEND: yoloe

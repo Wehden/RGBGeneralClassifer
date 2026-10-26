@@ -5,6 +5,8 @@ def value(initial, candidate, settings):
     if settings.get('display_mode', 'objects') == 'materials':
         readings = [m for m in (candidate or {}).get('materials', []) if m['confidence'] >= settings['vlm_threshold']]
         empty = ('No material above threshold' if 'materials' in (candidate or {}) else 'Materials not read') if candidate else 'Materials pending'
+        if not readings and initial.get('label_kind')=='material':
+            return {'label':initial['label'],'confidence':initial['confidence'],'provider':'detector'}
         return {'label': ' + '.join(m['label'] for m in readings) or empty,
                 'confidence': min((m['confidence'] for m in readings), default=None),
                 'provider': 'vlm' if readings else 'pending'}

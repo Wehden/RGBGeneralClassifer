@@ -3,6 +3,8 @@ FROM ${BASE_IMAGE}
 USER root
 RUN pip install --no-cache-dir onnxruntime==1.24.4
 COPY board /app/board
+COPY common /app/common
 COPY models/yoloe-26n-pf-320 /app/models/yoloe-26n-pf-320
+COPY models/yoloe-26n-materials-320 /app/models/yoloe-26n-materials-320
 USER 1000:1000
 CMD ["python", "-m", "board.main"]

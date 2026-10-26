@@ -1,5 +1,7 @@
 # Verification record
 
+Current portable networking and capture acceptance: [2026-10-26 receipt](portable-acceptance-20261026.md). The dated sections below retain earlier deployment history.
+
 Date: 2026-10-24, America/Los_Angeles. Initial deployment was built from the
 `codex/trash-sorting-demo` work. Final PR and source commit are available in the
 repository history. No merge is implied by deployment.

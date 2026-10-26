@@ -97,3 +97,54 @@ test('a pre-pause status response cannot overwrite the confirmed paused state',a
   await node('pause-vlm').onclick();resolve(json({paused:false,enabled:true,active:{}}));await old;
   assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
 });
+
+test('local classification preview sends no-recording policy independently of VLM',async()=>{
+  const {context,node}=setup();
+  node('classification-mode').value='preview';
+  let request;
+  context.fetch=async(url,options)=>{request={url,body:JSON.parse(options.body)};return json({classification_running:true,record_observations:false});};
+  await context.setClassification(true);
+  assert.equal(request.url,'/api/settings');
+  assert.deepEqual(request.body,{classification_running:true,record_observations:false});
+  assert.equal(node('classification-state').textContent,'Control saved · awaiting Uno Q');
+  context.acknowledgeClassification({classification_running:true,record_observations:false,applied_settings_version:0});
+  assert.equal(node('classification-state').textContent,'Running · preview only');
+  assert.equal(request.body.vlm_paused,undefined);
+});
+
+test('catch up keeps one snapshot and source across pages',async()=>{
+  const {context,node}=setup();
+  node('source').value='unoq';
+  const bodies=[];
+  context.fetch=async(url,options)=>{bodies.push(JSON.parse(options.body));return json({batch_id:'batch',queued:bodies.length,done:bodies.length===2});};
+  await node('catch-up').onclick();
+  assert.deepEqual(bodies,[{source_id:'unoq'},{source_id:'unoq',batch_id:'batch'}]);
+  assert.equal(node('catch-up').disabled,false);
+});
+
+test('live reconnection changes the resource URL and healthy status does not hide a failed image',async()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'unoq'}]",context);node('source').value='unoq';
+  context.live();const first=node('live').src;
+  context.live();assert.notEqual(node('live').src,first);
+  context.fetch=async()=>json({inference_ms:320});
+  node('live').naturalWidth=0;await context.status();
+  assert.equal(node('live-state').textContent,'Connecting live frame…');
+  node('live').complete=true;await context.status();
+  assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
+  node('live').onload();assert.equal(node('live-state').textContent,'Camera unavailable · reconnecting');
+  node('live').naturalWidth=640;await context.status();
+  assert.equal(node('live-state').textContent,'LIVE');
+});
+
+test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{
+  const {context,node}=setup();let gets=0,timers=0;
+  context.setTimeout=()=>{timers++;return 1;};
+  const event={analysis:{status:'complete'},detections:[{detection_id:'box',box:[0,0,1,1],display_label:'pen',label:'pen',label_provider:'detector',review_context:{}}],opinions:[],detector:{model:'yoloe'},settings:{display_mode:'objects'},event_id:'scene'};
+  context.fetch=async(url,options)=>{if(options){event.analysis.status='queued';return json({});}gets++;return json(event);};
+  await context.show('scene');
+  const card=node('detail').children.find(c=>c.className==='reading');
+  await card.children.find(c=>c.tag==='button').onclick();
+  assert.equal(gets,2);assert.equal(timers,1);
+  assert.match(node('detail').querySelector('.analysis-state').textContent,/queued/);
+});

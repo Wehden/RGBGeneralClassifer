@@ -2,11 +2,12 @@
 
 ## Current home deployment
 
-The primary camera is now the existing Arduino Uno Q (`birdwatcher`, currently
-192.168.1.127), repurposed with the user's approval. It runs a native ARM64
+The primary camera is the existing Arduino Uno Q (`birdwatcher`), repurposed with the user's approval. It runs a native ARM64
 build of `board/Dockerfile` inside an app-scoped Arduino App Lab custom brick.
 The cluster remains responsible for Redis, image storage, the web dashboard,
 and optional VLM inference. No vision-model download occurs during startup.
+
+Current installed artifacts and measured acceptance are in the [2026-10-26 receipt](portable-acceptance-20261026.md).
 
 The Portenta X8 at 192.168.1.231 is paused for the user's active-cooling work.
 Its RGB images, runtime file, outbox, and original bird rollback containers are
@@ -47,25 +48,26 @@ kubectl -n rgb-classifier rollout status deploy/rgb-ingest
 The `rgb-runtime` Secret needs `REDIS_PASSWORD`, a `REDIS_URL` using that
 password and private `rgb-redis:6379/0`, and a random `INGEST_TOKEN` of at least
 32 characters. Generate credentials privately, preserve them across releases,
-and never commit or print them. Redis is ClusterIP-only. The ingest role alone
-is exposed at the home NodePort 32081 on pragmatic, with local external traffic
-policy and network policy restricted to the Uno Q's address. History and live
-routes return 404 on this role. Recheck those restrictions after changing nodes
-or CNI/network-policy implementations.
+and never commit or print them. Redis is ClusterIP-only. Device requests use authenticated public HTTPS;
+`DEVICE_TOKENS_JSON` maps the stable source ID to its private bearer. The web
+relay keeps live frames in memory. The retained ingest role is internal only.
+See [portable networking](portable-networking.md) for Access credentials,
+source grants, network profiles, and preview/recording behavior.
 
 ## Uno Q installation and rollback
 
 Build the board image natively from repository contents:
 
 ```sh
-docker build -f board/Dockerfile -t rgb-classifier:unoq-RELEASE .
+docker build -f board/Dockerfile -t rgb-classifier:board-base .
+docker build -f board/Dockerfile.yoloe -t rgb-classifier:unoq-RELEASE .
 ```
 
 Copy `deploy/unoq/` to `/home/arduino/ArduinoApps/rgbclassifier`, set the custom
 brick's image to the tested native image, and provision a private
 `/home/arduino/rgb-classifier/runtime.env` (mode 0600) plus an owner-writable
-`data/` directory. Use `SOURCE_ID=unoq`, the cluster's ingest token,
-`ARCHIVE_URL=http://192.168.1.94:32081`, and `OUTBOX_DB=/data/outbox.sqlite3`.
+`data/` directory. Use `SOURCE_ID=unoq`, the dedicated source bearer and Access credential,
+`ARCHIVE_URL=https://rgb.wehden.com`, and `OUTBOX_DB=/data/outbox.sqlite3`.
 The current native image tag is recorded in the verification receipt.
 
 Before switching, preserve the old bird App Lab directory and image. Stop the
@@ -137,8 +139,8 @@ NFS and a PV Retain policy do not protect against server loss or deletion.
 The service has no GPU dependency. Build/push a native ARM64 service image on a
 Thor or publish a tested multi-architecture image. Remove the home `amd64`
 selector from web and replace the ingest node selector with the chosen lab
-node. Choose an unoccupied NodePort and point the board at that node; update
-source IPs and network policies. Do not reuse home IPs, tokens, VLM endpoints,
+node. Register an authenticated public service hostname if deploying a separate lab
+service. Moving only the board continues to use the existing public home service. Do not reuse home IPs, tokens, VLM endpoints,
 NFS exports, or a home source location.
 
 Use the lab's actual shared/distributed storage class for a new RWX PVC, or

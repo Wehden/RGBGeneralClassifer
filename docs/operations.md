@@ -59,7 +59,8 @@ source grants, network profiles, and preview/recording behavior.
 Build the board image natively from repository contents:
 
 ```sh
-docker build -f board/Dockerfile -t rgb-classifier:unoq-RELEASE .
+docker build -f board/Dockerfile -t rgb-classifier:board-base .
+docker build -f board/Dockerfile.yoloe -t rgb-classifier:unoq-RELEASE .
 ```
 
 Copy `deploy/unoq/` to `/home/arduino/ArduinoApps/rgbclassifier`, set the custom

@@ -8,7 +8,7 @@ PR #3 nor the supporting LaminarAuth PR #37 was merged by this work.
 | Component | Installed immutable identity |
 | --- | --- |
 | RGB web and ingest | `localhost:30500/rgb-classifier@sha256:34330f451a905de306c1f27f2720b5910d5d4ae119c3a33c5a95eee973a7cbef` |
-| Uno Q native image | `rgb-classifier:unoq-portable-materials-20261026-v3`, image ID `sha256:6a3a68d7566a042f32fb4d5e437eb13dedfc23715fd94db698e7c1ea984c3421` |
+| Uno Q native image | `rgb-classifier:unoq-portable-materials-20261026-v4`, image ID `sha256:a86c90d8d3c7b7b742c8416e3a5f4d52d549a315b2dd9447580764192bcd687e` |
 | Materials graph | `23960eb842490d643721b1bd14c5c8491798343d91b3320e6511a4d5388a6bcf` |
 | Objects graph | `8120cf9b3f3cf1dfbbc768b2eb869b48a18f6958f7272e1ba59258c1030ae806` |
 | LaminarAuth validator | `laminarflow:30500/laminarauth/validate@sha256:71c5f06ebaf37a10347cb4e8d717c32665ab081949e93eab0b53c81ddc74c9de` |
@@ -75,6 +75,12 @@ Streaming the downloads to the workstation and reading them there succeeded.
 That failure exposed a browser stream-end case: reconnection now changes the
 resource URL, retries an ended zero-width image, and requires a decoded image
 before showing LIVE. A real 640×480 camera image was observed in Chrome.
+
+A follow-up native build initially used the base Dockerfile, omitted ONNX
+Runtime, and failed at import on startup. It was replaced with the YOLOE
+Dockerfile using the retained working v2 image as its base; ONNX Runtime
+1.24.4 import was checked before restarting the corrected v4 image. The
+installation instructions now include the required YOLOE build step.
 
 Runtime was restored to Objects, local classification running, recording on,
 thresholds 0.45/0.65 and VLM unpaused, matching the pre-test operator values.

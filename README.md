@@ -1,7 +1,8 @@
-# RGBGeneralClassifier
+# RGB Console
 
-The local runner uses an attached **Orbbec Femto Bolt** for color, registered
-depth, and native IR, with **Nova 2 Lite on Amazon Bedrock** by default through
+**RGB Console** supports Linux USB webcams and the **Orbbec Femto Bolt**
+with color, registered depth, and native IR. Visual review uses **Nova 2 Lite
+on Amazon Bedrock** by default through
 the `default` AWS profile. **OpenRouter** also supports Nova 2 Lite, Nova Lite,
 and Gemini 2.5 Flash-Lite. One Python process serves the dashboard and camera API
 and keeps an SQLite archive. No Kubernetes, Redis, or Docker is needed.
@@ -43,7 +44,7 @@ Install the desktop menu entry and a command that works from any directory:
 
 ```sh
 .venv/bin/python scripts/install-desktop-launcher.py
-bolt-rgb
+rgb-console
 ```
 
 The console attaches to an existing service or starts a local runner. Closing
@@ -81,7 +82,7 @@ the implementation verification document.
   persistent SQLite delivery outbox, recovery after camera read failures.
 - `rgb/`: Flask/Waitress web and ingest roles, Redis event archive, immutable
   content-addressed JPEGs, optional serialized Ollama second pass; `rgb.local`
-  adds the standalone Bolt/SQLite/Bedrock path.
+  adds standalone camera capture, SQLite history, and provider selection.
 - `deploy/`: isolated k3s namespace, private Redis, NFS PVC, protected ingress,
   default-deny network policies and a camera-only ingest NodePort.
 - `models/`: pinned model, extracted labels, checksum, Apache license and provenance.

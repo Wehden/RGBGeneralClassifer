@@ -1,10 +1,13 @@
-# X11 desktop console
+# RGB Console
 
 The Qt console uses the same dashboard and Records pages as the browser.
 Color, registered depth, native IR, object/material modes, thresholds, model
 selection, pause/resume, archive capture, evaluations and evidence all use
 the existing local API and SQLite archive. Qt supplies the desktop window,
 menus, shortcuts, full-screen mode, connection status and native save dialogs.
+The title and camera selector use the device-reported name. Supported RGB,
+depth, IR and 3D views switch through small icons in the video's upper-right
+corner; RGB-only webcams do not show the strip.
 The console has a compact layout so the camera remains visible below its
 controls. It does not acquire the camera or run another model itself.
 
@@ -33,27 +36,27 @@ Other XCB dependencies must already be supplied by the desktop environment.
 OpenCV's Qt5 plugin path is excluded from the console's Qt6 setup; capture
 continues in the service process.
 
-To add **Bolt RGB Console** to the desktop application menu and the `bolt-rgb`
+To add **RGB Console** to the desktop application menu and the `rgb-console`
 command to `~/.local/bin`:
 
 ```sh
 .venv/bin/python scripts/install-desktop-launcher.py
 ```
 
-Launch from any directory with `bolt-rgb`. Arguments are forwarded unchanged,
-for example `bolt-rgb --attach` or `bolt-rgb -- --no-vlm`. The helper selects
+Launch from any directory with `rgb-console`. Arguments are forwarded unchanged,
+for example `rgb-console --attach` or `rgb-console -- --no-vlm`. The helper selects
 the checkout and its `.venv` automatically; relative runner paths resolve
 from the checkout.
 
 `~/.local/bin` is already on this machine's PATH. On another machine, add it
 to your shell PATH. The menu entry and helper use this checkout and its `.venv`.
 Reinstall after moving the checkout, removing the old symlink first. Remove
-`~/.local/share/applications/bolt-rgb.desktop` and `~/.local/bin/bolt-rgb`
+`~/.local/share/applications/rgb-console.desktop` and `~/.local/bin/rgb-console`
 to uninstall the launchers.
 
 ## Service ownership
 
-By default the console probes `http://127.0.0.1:8080`. If a local Bolt RGB
+By default the console probes `http://127.0.0.1:8080`. If a local RGB
 service is already running, it attaches and leaves that service running when
 the window closes. Its status bar states the ownership explicitly. Opening
 a console and browser together uses one capture owner.
@@ -132,7 +135,7 @@ browser camera/microphone access, and Chromium's sandbox remains enabled.
 
 | ID | Claim | Evidence/check |
 | --- | --- | --- |
-| D01 | Runs in an X11 Qt window with all three live views. | Actual Xwayland/xcb run; snapshots of color/depth/IR and native toolbar switching. |
+| D01 | Runs in an X11 Qt window with the camera's supported views. | Actual Xwayland/xcb run; snapshots of color/depth/IR and compact video-overlay mode icons. |
 | D02 | Uses the existing local service, with no second sensor owner. | Real attached run; lifecycle tests require no child spawn for an existing service. |
 | D03 | Closing an attached console leaves the service running; closing an owning console stops its child. | Automated subprocess ownership/close-race tests and actual camera service lifecycle checks. |
 | D04 | Existing review/control behavior remains shared. | Same HTML/JS/API; browser contract suite and desktop records/navigation/download checks. |

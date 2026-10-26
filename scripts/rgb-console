@@ -1,0 +1,11 @@
+#!/bin/sh
+# Resolve the checkout even when invoked through the user PATH symlink.
+set -eu
+launcher_path=$(readlink -f -- "$0")
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$launcher_path")/.." && pwd)
+if [ ! -x "$repo_dir/.venv/bin/python" ]; then
+    printf '%s\n' "Missing project environment. Install requirements-desktop.txt into $repo_dir/.venv." >&2
+    exit 1
+fi
+cd -- "$repo_dir"
+exec "$repo_dir/.venv/bin/python" -m rgb.desktop "$@"

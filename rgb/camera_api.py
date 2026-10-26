@@ -186,7 +186,7 @@ class CameraAPI:
         try:payload=self.pointcloud_builder.build(frame,stride,max_range)
         finally:self.pointcloud_slots.release()
         response=Response(payload,mimetype='application/octet-stream')
-        response.headers['Content-Disposition']='attachment; filename="bolt-pointcloud.bin"'
+        response.headers['Content-Disposition']='attachment; filename="rgb-pointcloud.bin"'
         self._headers(response,frame,'pointcloud','depth_registered')
         response.headers['X-RGB-Depth-Units']='metres'
         response.headers['X-RGB-Coordinate-Frame']='color_camera'

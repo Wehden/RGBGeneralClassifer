@@ -13,7 +13,7 @@ from rgb.desktop_service import ServiceController, local_url
 
 def parser():
     result = argparse.ArgumentParser(
-        description='X11 desktop console for the local Bolt RGB service',
+        description='RGB Console for the local camera service',
         epilog='Runner options follow --, for example -- --no-vlm --state-dir /path/to/archive')
     result.add_argument('--attach', action='store_true', help='Only attach; never start a runner')
     result.add_argument('--url', help='Attach to a loopback service at this URL (implies --attach)')
@@ -83,7 +83,7 @@ def main():
         from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
         from PySide6.QtWidgets import (
             QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
-            QStackedWidget, QToolBar, QVBoxLayout, QWidget,
+            QStackedWidget, QVBoxLayout, QWidget,
         )
         from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
         from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -112,7 +112,7 @@ def main():
     class Console(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle('Bolt RGB Console')
+            self.setWindowTitle('RGB Console')
             self.resize(1440, 1000)
             self.loaded = False
             self.closing = False
@@ -142,18 +142,15 @@ def main():
             self.setCentralWidget(self.stack)
             self.service_label = QLabel('Connecting…')
             self.statusBar().addWidget(self.service_label, 1)
-            self.toolbar = QToolBar('Console')
-            self.toolbar.setMovable(False)
-            self.addToolBar(self.toolbar)
             file_menu = self.menuBar().addMenu('&File')
             view_menu = self.menuBar().addMenu('&View')
-            self.action(file_menu, 'Dashboard', 'Ctrl+1', lambda: self.navigate('/'), toolbar=True)
-            self.action(file_menu, 'Records', 'Ctrl+2', lambda: self.navigate('/records'), toolbar=True)
-            self.toolbar.addSeparator()
+            self.action(file_menu, 'Dashboard', 'Ctrl+1', lambda: self.navigate('/'))
+            self.action(file_menu, 'Records', 'Ctrl+2', lambda: self.navigate('/records'))
+            self.channel_actions = {}
             for index, channel in enumerate(['color', 'depth', 'ir', 'pointcloud'], 1):
                 label={'color':'RGB','ir':'IR','pointcloud':'3D'}.get(channel,channel.title())
-                self.action(view_menu, label, f'Alt+{index}',
-                            lambda channel=channel: self.channel(channel), toolbar=True)
+                self.channel_actions[channel] = self.action(view_menu, label, f'Alt+{index}',
+                                                           lambda channel=channel: self.channel(channel))
             self.action(view_menu, 'Reload', 'F5', self.view.reload)
             self.action(view_menu, 'Full screen', 'F11',
                         lambda: self.showNormal() if self.isFullScreen() else self.showFullScreen())
@@ -164,13 +161,13 @@ def main():
             self.action(view_menu, 'Reset zoom', 'Ctrl+0', lambda: self.view.setZoomFactor(1))
             downloads_menu = file_menu.addMenu('Download')
             for title, path, name in [
-                ('Color snapshot', '/api/camera/color/snapshot.jpg', 'bolt-color.jpg'),
-                ('Depth preview', '/api/camera/depth/snapshot.jpg', 'bolt-depth.jpg'),
-                ('IR preview', '/api/camera/ir/snapshot.jpg', 'bolt-ir.jpg'),
-                ('Raw depth', '/api/camera/depth/raw.png', 'bolt-depth-uint16.png'),
-                ('Raw IR', '/api/camera/ir/raw.png', 'bolt-ir-uint16.png'),
-                ('Sensor frame bundle', '/api/camera/frame', 'bolt-frame.npz'),
-                ('3D point cloud frame', '/api/camera/pointcloud', 'bolt-pointcloud.bin'),
+                ('Color snapshot', '/api/camera/color/snapshot.jpg', 'rgb-color.jpg'),
+                ('Depth preview', '/api/camera/depth/snapshot.jpg', 'rgb-depth.jpg'),
+                ('IR preview', '/api/camera/ir/snapshot.jpg', 'rgb-ir.jpg'),
+                ('Raw depth', '/api/camera/depth/raw.png', 'rgb-depth-uint16.png'),
+                ('Raw IR', '/api/camera/ir/raw.png', 'rgb-ir-uint16.png'),
+                ('Sensor frame bundle', '/api/camera/frame', 'rgb-frame.npz'),
+                ('3D point cloud frame', '/api/camera/pointcloud', 'rgb-pointcloud.bin'),
                 ('Parquet archive', '/api/review/export/parquet', 'rgb-review.zip'),
                 ('Arrow archive', '/api/review/export/arrow', 'rgb-review.zip'),
             ]:
@@ -189,14 +186,12 @@ def main():
             threading.Thread(target=controller.watch, args=(self.bridge.status.emit,),
                              name='desktop-status', daemon=True).start()
 
-        def action(self, menu, label, shortcut, callback, *, toolbar=False):
+        def action(self, menu, label, shortcut, callback):
             action = QAction(label, self)
             if shortcut:
                 action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda _checked=False: callback())
             menu.addAction(action)
-            if toolbar:
-                self.toolbar.addAction(action)
             return action
 
         def navigate(self, path):
@@ -206,13 +201,15 @@ def main():
             script = """(() => {
               const select = document.getElementById('camera-channel');
               if (!select) return false;
+              const option = Array.from(select.options).find(o => o.value === %s);
+              if (!option || option.disabled || option.hidden) return false;
               select.value = %s;
               select.dispatchEvent(new Event('change'));
               return true;
-            })()""" % json.dumps(name)
+            })()""" % (json.dumps(name),json.dumps(name))
             def selected(ok):
                 if not ok:
-                    self.service_label.setText('Choose Dashboard first to change the live camera view.')
+                    self.service_label.setText('Camera view unavailable.')
             self.page.runJavaScript(script, selected)
 
         def update_status(self, status):
@@ -226,11 +223,19 @@ def main():
                 return
             health, vlm = status['data']['health'], status['data']['vlm']
             camera = health['camera']
-            lifecycle = 'Console started service; closing stops it' if status['owned'] else 'Attached; service stays running'
-            model = f"{vlm.get('selected_provider', 'bedrock')} / {vlm.get('selected_model', 'unknown')}"
+            self.setWindowTitle('RGB Console · ' + camera.get('name', camera.get('device', {}).get('name', 'Camera')))
+            channels=set(camera.get('channels',[]))
+            if camera.get('backend')=='orbbec' and 'depth' in channels:channels.add('pointcloud')
+            for channel,action in self.channel_actions.items():action.setEnabled(channel in channels)
+            lifecycle = 'Own service' if status['owned'] else 'Attached'
+            self.service_label.setToolTip(('Closing stops this service' if status['owned'] else 'Closing leaves the service running')
+                                          + ' · ' + controller.url)
+            provider=next((p for p in vlm.get('providers',[]) if p['id']==vlm.get('selected_provider')), {})
+            model=next((m['label'] for m in provider.get('models',[]) if m['id']==vlm.get('selected_model')),
+                       vlm.get('selected_model','VLM'))
             mode = 'disabled' if not vlm['enabled'] else 'paused' if vlm.get('paused') else 'active'
-            text = (f"{lifecycle} · Camera {camera.get('state', 'unknown')} "
-                    f"({camera.get('capture_fps', 0):.1f} FPS) · {model} {mode} · {controller.url}")
+            text = (f"{camera.get('name', 'Camera')} · {camera.get('capture_fps', 0):.1f} FPS "
+                    f"· {model} {mode} · {lifecycle}")
             if camera.get('error'):
                 text += ' · ' + camera['error']
             self.service_label.setText(text)
@@ -321,7 +326,12 @@ def main():
             application.quit()
 
     application = QApplication([sys.argv[0]])
-    application.setApplicationName('Bolt RGB Console')
+    application.setApplicationName('RGB Console')
+    application.setStyle('Fusion')
+    application.setStyleSheet('QMainWindow, QStatusBar {background:#ece9e0;color:#191919} '
+                             'QMenuBar {background:#191919;color:#f7f5ee;padding:3px} '
+                             'QMenuBar::item:selected {background:#1748b0} '
+                             'QStatusBar {font-size:11px;border-top:1px solid #c3c0b7}')
     application.setOrganizationName('RGBGeneralClassifier')
     application.setQuitOnLastWindowClosed(False)
     window = Console()

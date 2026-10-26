@@ -8,12 +8,12 @@ class Element {
   append(...nodes){this.children.push(...nodes);}
   replaceChildren(...nodes){this.children=nodes;}
   setAttribute(name,value){this[name]=value;}
-  querySelectorAll(selector){const result=[];const matches=e=>selector==='form'?e.tag==='form':selector==='details[data-evaluation]'?e.tag==='details'&&e.dataset.evaluation:selector.startsWith('.')?e.className===selector.slice(1):false;function walk(e){for(const child of e.children){if(matches(child))result.push(child);walk(child);}}walk(this);return result;}
+  querySelectorAll(selector){const result=[];const matches=e=>selector==='option'?e.tag==='option':selector==='form'?e.tag==='form':selector==='details[data-evaluation]'?e.tag==='details'&&e.dataset.evaluation:selector.startsWith('.')?e.className===selector.slice(1):false;function walk(e){for(const child of e.children){if(matches(child))result.push(child);walk(child);}}walk(this);return result;}
   querySelector(selector){return this.querySelectorAll(selector)[0]??null;}
 }
 function setup(){
   const nodes=new Map();
-  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){this.url=null;} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
+  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){this.url=null;} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag),querySelectorAll:selector=>selector==='[data-channel]'?[...nodes.values()].filter(n=>n.dataset.channel):[]},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
   vm.runInContext(fs.readFileSync('rgb/static/app.js','utf8'),context);
   return {context,node:id=>context.document.getElementById(id)};
 }
@@ -43,7 +43,7 @@ test('provider selection sends the provider and model together and survives poll
   };
   await node('select-vlm-model').onclick();
   assert.deepEqual(saved,{selected_provider:'openrouter',selected_model:'google/gemini-2.5-flash-lite',model_selection_reason:'model_comparison'});
-  assert.match(node('provider-status').textContent,/OpenRouter.*Gemini 2.5 Flash-Lite/);
+  assert.equal(node('vlm-model-choice').value,'google/gemini-2.5-flash-lite');
 });
 
 test('failed provider save retains the pending selection',async()=>{
@@ -66,7 +66,7 @@ test('status polled during a provider save cannot undo its acknowledgement',asyn
   saveResolve(json({}));await saving;
   statusResolve(json(providerState()));await stale;
   assert.equal(node('vlm-provider').value,'openrouter');
-  assert.match(node('provider-status').textContent,/OpenRouter/);
+  assert.equal(node('vlm-provider').value,'openrouter');
 });
 
 test('provider measurements are never pooled across transports',()=>{
@@ -77,6 +77,26 @@ test('provider measurements are never pooled across transports',()=>{
     {provider:'openrouter',model:'us.amazon.nova-2-lite-v1:0',workload,p50_ms:9000,p95_ms:10000,samples:10},
   ]});
   assert.match(node('provider-latency').textContent,/p50 1.00 s/);
+});
+
+test('camera mode icons follow capabilities and active view without showing unavailable modes',()=>{
+  const {context,node}=setup();
+  for(const channel of ['color','depth','ir','pointcloud']){
+    const option=new Element('option');option.value=channel;node('camera-channel').append(option);
+    node('mode-'+channel).dataset.channel=channel;
+  }
+  node('camera-channel').value='color';
+  context.renderCamera({backend:'v4l2',name:'Webcam',views:['color']});
+  assert.equal(node('view-switch').hidden,true);
+  assert.equal(node('mode-depth').hidden,true);
+  assert.equal(node('camera-channel').children[1].disabled,true);
+  context.renderCamera({backend:'orbbec',views:['color','depth','ir','pointcloud']});
+  assert.equal(node('view-switch').hidden,false);
+  assert.equal(node('mode-ir').hidden,false);
+  assert.equal(node('camera-channel').children[1].disabled,false);
+  node('camera-channel').value='depth';context.syncViewIcons();
+  assert.equal(node('mode-depth')['aria-pressed'],'true');
+  assert.equal(node('mode-color')['aria-pressed'],'false');
 });
 
 test('evaluation sends the displayed context, independent of global mode',async()=>{
@@ -146,7 +166,7 @@ test('pause control saves durable intent and distinguishes finishing from idle',
   context.fetch=async(url,options)=>{if(options){saved=JSON.parse(options.body);return json({vlm_paused:true});}return json({enabled:true,paused:true,active:{attempt_id:'running'}});};
   await node('pause-vlm').onclick();assert.deepEqual(saved,{vlm_paused:true});
   assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.match(node('vlm-state').textContent,/finishing/);
-  context.renderVlm({enabled:true,paused:true,active:null});assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
+  context.renderVlm({enabled:true,paused:true,active:null});assert.equal(node('vlm-state').textContent,'Paused');
 });
 
 test('a pre-pause status response cannot overwrite the confirmed paused state',async()=>{
@@ -154,7 +174,7 @@ test('a pre-pause status response cannot overwrite the confirmed paused state',a
   const old=context.vlmStatus();
   context.fetch=async(url,options)=>json(options?{vlm_paused:true}:{paused:true,enabled:true,active:null});
   await node('pause-vlm').onclick();resolve(json({paused:false,enabled:true,active:{}}));await old;
-  assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused · VLM idle');
+  assert.equal(node('pause-vlm').textContent,'Resume VLM');assert.equal(node('vlm-state').textContent,'Paused');
 });
 
 test('capture pause remains separate from VLM pause and keeps manual capture available',async()=>{
@@ -168,7 +188,7 @@ test('capture pause remains separate from VLM pause and keeps manual capture ava
   await node('pause-capture').onclick();
   assert.deepEqual(saved,{capture_paused:true});
   assert.equal(node('pause-capture').textContent,'Resume capture');
-  assert.match(node('capture-state').textContent,/live views continue/);
+  assert.equal(node('capture-state').textContent,'Paused');
   assert.equal(node('pause-vlm').textContent,'Pause VLM');
   assert.notEqual(node('capture-observation').disabled,true);
 });

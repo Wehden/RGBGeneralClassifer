@@ -83,7 +83,8 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             loc=store.location(key)
             label=loc['label'] if loc else s.get('location')
             if loc and not label and loc.get('latitude') is not None:label=f"{loc['latitude']:.5f}, {loc['longitude']:.5f}"
-            result.append({'id':key,'label':s.get('label',key),'location':label or None,'location_method':loc['method'] if loc else 'configured' if label else 'disabled','local':bool(s.get('local'))})
+            name=local_runtime.camera.name if local_runtime and s.get('local') else s.get('label',key)
+            result.append({'id':key,'label':name,'location':label or None,'location_method':loc['method'] if loc else 'configured' if label else 'disabled','local':bool(s.get('local'))})
         return jsonify(result)
 
     @app.get('/api/sources/<source_id>/location')

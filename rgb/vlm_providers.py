@@ -121,7 +121,7 @@ class OpenRouterProvider:
         # No transport retries, redirects, or automatic model/provider fallback.
         try:
             response=self.session.post(OPENROUTER_URL,json=body,
-                headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','X-OpenRouter-Title':'Bolt RGB'},
+                headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','X-OpenRouter-Title':'RGB Console'},
                 timeout=(self.connect_timeout,self.read_timeout),allow_redirects=False)
         except requests.RequestException as exc:
             raise ProviderError('OpenRouter transport failed: '+type(exc).__name__) from exc

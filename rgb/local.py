@@ -1,4 +1,4 @@
-"""Run the local Femto Bolt service: python -m rgb.local."""
+"""Run the local RGB camera service: python -m rgb.local."""
 import argparse
 import logging
 import math
@@ -16,7 +16,7 @@ from rgb.vlm_providers import MODELS, model_selection
 
 
 def parser():
-    p=argparse.ArgumentParser(description='Local Femto Bolt camera and visual review service')
+    p=argparse.ArgumentParser(description='Local RGB camera and visual review service')
     p.add_argument('--host',default=os.environ.get('RGB_HOST','127.0.0.1'))
     p.add_argument('--port',type=int,default=int(os.environ.get('RGB_PORT','8080')))
     p.add_argument('--state-dir',default=os.environ.get('RGB_STATE_DIR',str(Path.home()/'.local/share/bolt-rgb')))
@@ -98,7 +98,7 @@ def main():
                                  max_channel_skew_ms=camera.skew_ms,freshness_s=camera.freshness_s,
                                  max_cached_frames=camera.max_frames,max_cache_bytes=camera.max_bytes,
                                  shutdown_deadline_s=10)
-    app=create_app(store,sources={'femto-bolt':{'label':'Femto Bolt','local':True}},local_runtime=runtime)
+    app=create_app(store,sources={'femto-bolt':{'local':True}},local_runtime=runtime)
     # Bind and initialize the archive first; camera and ML failures remain observable through the API.
     server=create_server(app,host=args.host,port=args.port,threads=16,channel_timeout=30)
     stopped=threading.Event()

@@ -75,6 +75,23 @@ def test_frame_bundle_raw_planes_calibration_and_headers(local):
     assert client.get('/api/camera/thermal/snapshot.jpg').status_code==404
 
 
+def test_local_source_reports_actual_camera_name_without_renaming_archive_identity(local,monkeypatch):
+    store,camera,frame,result,runtime,app=local
+    camera.backend='v4l2'
+    monkeypatch.setattr('rgb.camera.v4l2_name',lambda device:'C922 Pro Stream Webcam')
+    client=app.test_client()
+    assert client.get('/api/sources').json[0]['label']=='C922 Pro Stream Webcam'
+    assert client.get('/api/sources').json[0]['id']=='femto-bolt'
+    status=client.get('/api/camera/status').json
+    assert status['name']==status['device']['name']=='C922 Pro Stream Webcam'
+    assert status['backend']=='v4l2'
+    frame.metadata['device']={'name':'C922 Pro Stream Webcam'}
+    runtime.archive(frame,result)
+    camera.backend='orbbec';camera.info={'name':'Orbbec Femto Bolt','serial':'test'}
+    assert client.get('/api/sources').json[0]['label']=='Orbbec Femto Bolt'
+    assert client.get('/api/review/records').json['records'][0]['camera_name']=='C922 Pro Stream Webcam'
+
+
 def test_stale_camera_leaves_status_health_archive_available(local):
     store,camera,frame,result,runtime,app=local
     event=runtime.archive(frame,result)

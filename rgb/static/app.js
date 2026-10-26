@@ -53,7 +53,7 @@ async function show(id, refresh=false) {
       const details = element('details'); const summary = element('summary','Detection history'); const content = element('div',undefined,'detection-history'); details.append(summary,content); details.open = openedHistories.has(d.detection_id);
       details.ontoggle = () => { if (details.open) { openedHistories.add(d.detection_id); history(d,content); } else openedHistories.delete(d.detection_id); };
       const requestButton=element('button','Request VLM for this detection');
-      requestButton.onclick=async()=>{requestButton.disabled=true;try {const r=await fetch(`/api/detections/${d.detection_id}/analyze`,{method:'POST',headers:{'X-RGB-Request':'analysis'}});if(!r.ok)throw new Error(`Request failed (${r.status})`);requestButton.textContent='VLM requested';}catch(e){requestButton.textContent=e.message;requestButton.disabled=false;}};
+      requestButton.onclick=async()=>{requestButton.disabled=true;try {const r=await fetch(`/api/detections/${d.detection_id}/analyze`,{method:'POST',headers:{'X-RGB-Request':'analysis'}});if(!r.ok)throw new Error(`Request failed (${r.status})`);requestButton.textContent='VLM requested'; if(selected===id)await show(id,true);}catch(e){requestButton.textContent=e.message;requestButton.disabled=false;}};
       if (details.open) history(d,content); card.append(requestButton,details,evaluation(d)); target.append(card);
     });
     for (const opinion of event.opinions.filter(o=>o.kind === 'box_comparisons')) { if (opinion.errors.length) target.append(element('p',`${opinion.model}: ${opinion.errors.map(e=>e.error).join('; ')}`,'muted')); }

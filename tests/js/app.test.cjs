@@ -136,3 +136,15 @@ test('live reconnection changes the resource URL and healthy status does not hid
   node('live').naturalWidth=640;await context.status();
   assert.equal(node('live-state').textContent,'LIVE');
 });
+
+test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{
+  const {context,node}=setup();let gets=0,timers=0;
+  context.setTimeout=()=>{timers++;return 1;};
+  const event={analysis:{status:'complete'},detections:[{detection_id:'box',box:[0,0,1,1],display_label:'pen',label:'pen',label_provider:'detector',review_context:{}}],opinions:[],detector:{model:'yoloe'},settings:{display_mode:'objects'},event_id:'scene'};
+  context.fetch=async(url,options)=>{if(options){event.analysis.status='queued';return json({});}gets++;return json(event);};
+  await context.show('scene');
+  const card=node('detail').children.find(c=>c.className==='reading');
+  await card.children.find(c=>c.tag==='button').onclick();
+  assert.equal(gets,2);assert.equal(timers,1);
+  assert.match(node('detail').querySelector('.analysis-state').textContent,/queued/);
+});

@@ -195,7 +195,8 @@ def push_live():
             current = dict(state)
         previous = current['sequence']
         age = max(0, time.time()-current['last_frame'])
-        jpeg = current.pop('jpeg') if age < 15 else None
+        jpeg = current.pop('jpeg', None)
+        if age >= 15:jpeg = None
         current.update(source_id=SOURCE, settings=policy['settings'])
         try:
             transport.request('POST', '/live', json={'status':current,

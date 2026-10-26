@@ -163,10 +163,14 @@ def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
     store.redis.hset('rgb:analysis',event['event_id'],json.dumps(state))
     failures=0
     for endpoint in endpoints:
+        progress_key='rgb:analysis-progress:'+job_id
+        endpoint_key=json.dumps([endpoint['url'],endpoint['model']])
+        progress=json.loads(store.redis.hget(progress_key,endpoint_key) or '{}')
         opinion={'kind':'box_comparisons','model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'readings':[],'errors':[]}
         for start in range(0,len(all_crops),4):
             batch=all_crops[start:start+4]
-            recovered=[chosen[i['index']] for i in batch if i['index'] in chosen and chosen[i['index']].get('model')==endpoint['model'] and chosen[i['index']].get('endpoint')==endpoint['url']]
+            recovered=[progress.get(str(i['index']),chosen.get(i['index'])) for i in batch]
+            recovered=[c for c in recovered if c and c.get('model')==endpoint['model'] and c.get('endpoint')==endpoint['url']]
             opinion['readings'].extend(recovered)
             recovered_indices={r['box_index'] for r in recovered}
             batch=[i for i in batch if i['index'] not in recovered_indices]
@@ -178,6 +182,8 @@ def analyze(store,event,endpoints,job_id,yield_when=None,indices=None):
                     index=reading['box_index']
                     candidate={**reading,'attempt_id':attempt_id,'model':endpoint['model'],'endpoint':endpoint['url'],'observed_at':now(),'fingerprint':crop_by_index[index]['fingerprint']}
                     opinion['readings'].append(candidate)
+                    progress[str(index)]=candidate
+                    store.redis.hset(progress_key,endpoint_key,json.dumps(progress))
                     if index not in chosen:
                         chosen[index]=store.enhance(event,index,candidate,job_id)
                     state['completed_boxes']=len(chosen)

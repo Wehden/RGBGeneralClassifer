@@ -40,6 +40,7 @@ def query(store, args):
         raw=json.loads(fields['event'])
         event=store.get(raw['event_id'])
         observed=datetime.fromisoformat(raw['observed_at'])
+        if not event['detections']:last=stream_id+':0'
         for i,d in enumerate(event['detections']):
             if stream_id==row_id and i<=index:continue
             last=stream_id+':'+str(i)

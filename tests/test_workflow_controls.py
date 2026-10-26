@@ -169,3 +169,36 @@ def test_live_results_publish_before_checkpoint_or_pause(client,event,monkeypatc
     assert len(published['readings'])==4
     assert post.call_count==1
     assert published['event_id']==saved['event_id']
+
+
+def test_secondary_endpoint_checkpoint_resumes_without_repeating_batches(client,event,monkeypatch):
+    from rgb.enrichment import AnalysisDeferred
+    c,store=client
+    event['detections']=[dict(event['detections'][0]) for _ in range(5)]
+    c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40})
+    saved=store.get(event['event_id']);calls=[]
+    def read(endpoint,event,full,batch,store,job):
+        calls.append((endpoint['url'],[i['index'] for i in batch]))
+        return [reading(index=i['index']) for i in batch],str(uuid4())
+    monkeypatch.setattr('rgb.enrichment.read_boxes',read)
+    endpoints=[{'url':'http://first','model':'qwen'},{'url':'http://second','model':'qwen'}]
+    with pytest.raises(AnalysisDeferred):
+        analyze(store,saved,endpoints,'multi',yield_when=Mock(side_effect=[False,False,False,True]))
+    result=analyze(store,saved,endpoints,'multi')
+    assert calls==[('http://first',[0,1,2,3]),('http://first',[4]),('http://second',[0,1,2,3]),('http://second',[4])]
+    assert result['status']=='complete'
+    opinions=store.get(event['event_id'])['opinions']
+    assert [len(o['readings']) for o in opinions]==[5,5]
+
+
+def test_record_pagination_crosses_more_than_500_empty_scenes(client,event):
+    c,store=client
+    c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40})
+    for _ in range(501):
+        response=c.post('/api/ingest',json={**event,'event_id':str(uuid4()),'detections':[]},headers={'Authorization':'Bearer '+'x'*40})
+        assert response.status_code==201
+    first=c.get('/api/review/records').json
+    assert first['records']==[] and first['next_cursor']
+    second=c.get('/api/review/records',query_string={'before':first['next_cursor']}).json
+    assert len(second['records'])==1
+    assert second['records'][0]['observation_id']==event['event_id']

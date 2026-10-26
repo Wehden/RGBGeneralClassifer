@@ -156,3 +156,28 @@ def test_large_live_upload_does_not_spool_to_disk(portable,monkeypatch):
     finally:
         server.close()
         server.task_dispatcher.shutdown()
+
+
+def test_live_uploader_survives_stale_then_fresh_camera_frame():
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    from test_enrichment import Finished
+    tree=ast.parse(Path('board/main.py').read_text())
+    function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='push_live')
+    state={};sent=[]
+    frames=iter([{'sequence':1,'last_frame':0,'jpeg':b'stale'}, {'sequence':2,'last_frame':99,'jpeg':b'fresh'}])
+    class Condition:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def wait_for(self,*args,**kwargs):state.update(next(frames))
+    def request(*args,**kwargs):
+        # Exercise actual JSON encoding, then end the infinite uploader after recovery.
+        json.dumps(kwargs['json']);sent.append(kwargs['json'])
+        if len(sent)==2:raise Finished()
+    scope={'condition':Condition(),'state':state,'time':SimpleNamespace(time=lambda:100),'SOURCE':'unoq','policy':{'settings':{}},'transport':SimpleNamespace(request=request),'requests':requests,'base64':base64}
+    exec(compile(ast.Module(body=[function],type_ignores=[]),'board/main.py','exec'),scope)
+    with pytest.raises(Finished):scope['push_live']()
+    assert sent[0]['image_b64'] is None
+    assert sent[1]['image_b64']==base64.b64encode(b'fresh').decode()
+    assert all('jpeg' not in p['status'] for p in sent)

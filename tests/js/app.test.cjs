@@ -121,3 +121,15 @@ test('catch up keeps one snapshot and source across pages',async()=>{
   assert.deepEqual(bodies,[{source_id:'unoq'},{source_id:'unoq',batch_id:'batch'}]);
   assert.equal(node('catch-up').disabled,false);
 });
+
+test('live reconnection changes the resource URL and healthy status does not hide a failed image',async()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'unoq'}]",context);node('source').value='unoq';
+  context.live();const first=node('live').src;
+  context.live();assert.notEqual(node('live').src,first);
+  context.fetch=async()=>json({inference_ms:320});
+  node('live').naturalWidth=0;await context.status();
+  assert.equal(node('live-state').textContent,'Connecting live frame…');
+  node('live').naturalWidth=640;await context.status();
+  assert.equal(node('live-state').textContent,'LIVE');
+});

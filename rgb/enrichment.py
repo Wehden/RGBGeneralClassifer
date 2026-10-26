@@ -217,7 +217,7 @@ def latest_pending(store,exclude=None):
     for item in sorted(candidates,key=lambda x:x['captured'],reverse=True):
         if item['event_id']==exclude or not 0<=time.time()-item['captured']<90:continue
         state=json.loads(store.redis.hget('rgb:analysis',item['event_id']) or '{}')
-        if state.get('status') not in {'complete','partial','failed','disabled','manual_only'}:
+        if state.get('status') not in {'complete','partial','failed','disabled','manual_only'} or (state.get('status') in {'partial','failed'} and state.get('requested_indices') is not None):
             return item
     return None
 
@@ -264,7 +264,7 @@ def run(store,endpoints):
                             store.redis.set('rgb:vlm:cursor',row_id)
                             cursor=row_id
                         continue
-                    terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'} and not (state['status']=='partial' and state.get('requested_indices') is not None and not manual)
+                    terminal=state.get('schema_version',0)>=2 and state['status'] in {'complete','partial','failed'} and not (state['status'] in {'partial','failed'} and state.get('requested_indices') is not None and not manual)
                     if not (terminal and (not manual or state.get('job_id')==job_id)):
                         # Finish one batch before yielding. This lets historical
                         # observations progress while new scenes get prompt service.
@@ -291,7 +291,7 @@ def run(store,endpoints):
                 raise
             except Exception as exc:
                 if event:store.processing_failure(event,job_id,exc)
-                store.redis.hset('rgb:analysis',event_id,json.dumps({'status':'failed','schema_version':2,'job_id':job_id,'error':type(exc).__name__,'finished_at':now()}))
+                store.redis.hset('rgb:analysis',event_id,json.dumps({'status':'failed','schema_version':2,'job_id':job_id,'requested_indices':indices,'error':type(exc).__name__,'finished_at':now()}))
             if manual:
                 if fields.get('pending_key'):store.redis.hdel('rgb:manual:pending',fields['pending_key'])
                 store.redis.set('rgb:analysis:request_cursor',row_id)

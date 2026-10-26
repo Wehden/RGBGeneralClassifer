@@ -202,3 +202,20 @@ def test_record_pagination_crosses_more_than_500_empty_scenes(client,event):
     second=c.get('/api/review/records',query_string={'before':first['next_cursor']}).json
     assert len(second['records'])==1
     assert second['records'][0]['observation_id']==event['event_id']
+
+
+def test_failed_individual_request_preserves_automatic_processing_of_other_boxes(client,event,monkeypatch):
+    import requests
+    c,store=client
+    event['detections']=[dict(event['detections'][0]) for _ in range(2)]
+    c.post('/api/ingest',json=event,headers={'Authorization':'Bearer '+'x'*40})
+    saved=store.get(event['event_id'])
+    monkeypatch.setattr('rgb.enrichment.requests.post',Mock(side_effect=requests.Timeout()))
+    state=analyze(store,saved,[{'url':'http://vlm','model':'qwen'}],'single-failed',indices=[0])
+    assert state['status']=='failed' and state['requested_indices']==[0]
+    assert latest_pending(store)['event_id']==saved['event_id']
+    automatic=Mock(side_effect=Finished())
+    monkeypatch.setattr('rgb.enrichment.analyze',automatic)
+    with pytest.raises(Finished):run(store,[{'url':'http://vlm','model':'qwen'}])
+    assert automatic.call_args.kwargs['indices'] is None
+    assert automatic.call_args.args[3]=='auto-v3:'+saved['event_id']

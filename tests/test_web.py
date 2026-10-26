@@ -163,3 +163,11 @@ def test_export_download_releases_slot_for_next_format(client,event):
         assert response.data.startswith(b'PK')
         assert 'attachment' in response.headers['Content-Disposition']
         response.close()
+
+
+def test_live_decoder_script_and_blob_images_allowed(client):
+    c, _ = client
+    page = c.get('/')
+    assert b'/static/live-video.js' in page.data
+    assert "img-src 'self' blob:" in page.headers['Content-Security-Policy']
+    assert c.get('/static/live-video.js').status_code == 200

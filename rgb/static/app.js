@@ -3,12 +3,15 @@ let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
 const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
   new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
+const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
+window.addEventListener('pagehide', () => liveVideo.stop());
+window.addEventListener('pageshow', event => { if (event.persisted) live(); });
 function element(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
 function date(value) { return new Date(value).toLocaleString(); }
 async function status() {
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); if($('camera-channel')?.value!=='pointcloud')$('live-state').textContent = s.error ? s.error : s.state && s.state !== 'running' ? s.state : 'LIVE'; $('timing').textContent = `${s.inference_ms ?? '?'} ms inference`; if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
-  catch { if($('camera-channel')?.value!=='pointcloud')$('live-state').textContent = 'Camera unavailable · reconnecting'; $('timing').textContent = ''; }
+  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
+  catch { $('timing').textContent = 'Camera status unavailable'; }
 }
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
@@ -17,17 +20,16 @@ function live() {
   $('live').hidden=cloud;
   if($('pointcloud-view'))$('pointcloud-view').hidden=!cloud;
   if(cloud) {
-    $('live').removeAttribute('src');
+    liveVideo.stop();
     if(pointcloudViewer)pointcloudViewer.start();else $('live-state').textContent='3D viewer unavailable';
   } else {
     if(pointcloudViewer)pointcloudViewer.stop();
-    $('live').src = s.local && channel !== 'color' ? `/api/camera/${channel}/stream` : `/api/live/${encodeURIComponent(s.id)}/stream`;
+    liveVideo.start( s.local && channel !== 'color' ? `/api/camera/${channel}/stream` : `/api/live/${encodeURIComponent(s.id)}/stream`);
   }
   if (s.local) { $('snapshot-link').href=cloud?'/api/camera/pointcloud':`/api/camera/${channel}/snapshot.jpg`;$('snapshot-link').textContent=cloud?'Point cloud frame':'Snapshot'; $('raw-link').hidden=channel==='color';const rawChannel=cloud?'depth':channel; $('raw-link').href=`/api/camera/${rawChannel}/raw.png`; $('raw-link').textContent=`Raw 16-bit ${rawChannel}`; }
   $('camera-location').textContent = s.location ? `${s.location} · ${s.location_method}` : 'Location unassigned';
   loadLocation(); status(); clearInterval(timer); timer = setInterval(status, 10000);
 }
-$('live').onerror = () => { $('live-state').textContent = 'Camera unavailable · reconnecting'; setTimeout(live, 5000); };
 async function history(d, node) {
   try { const entries = await get(`/api/detections/${d.detection_id}/history`); node.replaceChildren();
     if (!entries.length) node.append(element('p',`Classifier: ${d.label} · ${(d.confidence*100).toFixed(1)}%`));
@@ -68,19 +70,21 @@ async function show(id, refresh=false) {
       if (c && event.settings.display_mode !== 'materials') { card.append(element('p',`${d.label} → ${c.label} · ${c.comparison}`,'comparison'),element('p',c.reason)); if (!d.enhancement_accepted) card.append(element('p',`VLM ${(c.confidence*100).toFixed(1)}% · threshold ${(event.settings.vlm_threshold*100).toFixed(0)}%`,'muted')); }
       const details = element('details'); const summary = element('summary','Detection history'); const content = element('div',undefined,'detection-history'); details.append(summary,content); details.open = openedHistories.has(d.detection_id);
       details.ontoggle = () => { if (details.open) { openedHistories.add(d.detection_id); history(d,content); } else openedHistories.delete(d.detection_id); };
-      if (details.open) history(d,content); card.append(details,evaluation(d)); target.append(card);
+      const requestButton=element('button','Request VLM for this detection');
+      requestButton.onclick=async()=>{requestButton.disabled=true;try {const r=await fetch(`/api/detections/${d.detection_id}/analyze`,{method:'POST',headers:{'X-RGB-Request':'analysis'}});if(!r.ok)throw new Error(`Request failed (${r.status})`);requestButton.textContent='VLM requested'; if(selected===id)await show(id,true);}catch(e){requestButton.textContent=e.message;requestButton.disabled=false;}};
+      if (details.open) history(d,content); if(!event.frame_id)card.append(requestButton); card.append(details,evaluation(d)); target.append(card);
     });
     for (const opinion of event.opinions.filter(o=>o.kind === 'box_comparisons')) { if (opinion.errors.length) target.append(element('p',`${opinion.model}: ${opinion.errors.map(e=>e.error).join('; ')}`,'muted')); }
     const button = element('button',state.status === 'queued' || state.status === 'running' ? 'Analysis in progress' : 'Analyze detections'); button.disabled = ['queued','running','disabled'].includes(state.status);
     button.onclick = async () => { button.disabled = true; try { const r = await fetch(`/api/events/${id}/analyze`,{method:'POST',headers:{'X-RGB-Request':'analysis'}}); if (!r.ok) throw new Error(`Request failed (${r.status})`); show(id,true); } catch (e) { button.textContent = e.message; button.disabled = false; } };
     target.append(button,element('p',`Observation ID: ${event.event_id}`,'muted'));
-    if (['queued','running','paused'].includes(state.status)) detailTimer=setTimeout(()=>show(id,true),3000);
+    if (['queued','running','paused','manual_only'].includes(state.status)) detailTimer=setTimeout(()=>show(id,true),3000);
   } catch (e) { if(!refresh || !reviewIsEditing(target))target.replaceChildren(element('p',e.message));else detailTimer=setTimeout(()=>show(id,true),3000); }
 }
 function reviewIsEditing(target) { return [...target.querySelectorAll('details[data-evaluation]')].some(d=>d.open||d.querySelector('form').dataset.dirty==='true'); }
 async function load(older=false) {
   try { const events = await get('/api/events'+(older && cursor ? '?before='+encodeURIComponent(cursor) : '')); if (!older) $('events').replaceChildren();
-    for (const event of events) { const b = element('button',undefined,'event'); const img = element('img'); img.src = `/api/events/${event.event_id}/image.jpg`; img.alt = ''; img.loading = 'lazy'; const info = element('div'); info.append(element('strong',[...new Set(event.detections.map(d=>d.display_label))].join(', ')),element('span',date(event.observed_at)),element('span',`${event.source_id} · ${event.analysis.status.replaceAll('_',' ')}`)); b.append(img,info); b.onclick = () => show(event.event_id); $('events').append(b); }
+    for (const event of events) { const b = element('button',undefined,'event'); const img = element('img'); img.src = `/api/events/${event.event_id}/image.jpg`; img.alt = ''; img.loading = 'lazy'; const info = element('div'); info.append(element('strong',[...new Set(event.detections.map(d=>d.display_label))].join(', ')||'No detections above threshold'),element('span',date(event.observed_at)),element('span',`${event.source_id} · ${event.analysis.status.replaceAll('_',' ')}`)); b.append(img,info); b.onclick = () => show(event.event_id); $('events').append(b); }
     if (events.length) cursor = events.at(-1).cursor; $('older').disabled = events.length < 50; $('archive-status').textContent = $('events').children.length ? '' : 'Waiting for the first detected object.';
   } catch (e) { $('archive-status').textContent = `Archive unavailable: ${e.message}`; }
 }
@@ -180,3 +184,45 @@ $('browser-location').onclick=()=>{
   if (!navigator.geolocation) {$('location-status').textContent='Browser location unavailable';return;}
   navigator.geolocation.getCurrentPosition(async position=>{if($('source').value!==sourceId)return;$('location-lat').value=position.coords.latitude;$('location-lon').value=position.coords.longitude;$('location-status').textContent='Coordinates received; saving…';try {await saveLocation({method:'browser',label,latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy_m:position.coords.accuracy},sourceId);} catch(e) {if($('source').value===sourceId)$('location-status').textContent=e.message;}},error=>{if($('source').value===sourceId)$('location-status').textContent=({1:'Browser location permission denied',2:'Browser location unavailable',3:'Browser location timed out (20s). No coordinates received.'})[error.code]||error.message;},{enableHighAccuracy:false,timeout:20000,maximumAge:60000});
 };
+
+
+if ($('catch-up')) $('catch-up').onclick=async()=>{
+  const source_id=$('source').value;
+  $('catch-up').disabled=true;
+  let batch_id;
+  try {
+    while(true){
+      const r=await fetch('/api/analysis/catch-up',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'analysis'},body:JSON.stringify({source_id,...(batch_id?{batch_id}:{})})});
+      if(!r.ok)throw new Error(`Catch up failed (${r.status})`);
+      const batch=await r.json();batch_id=batch.batch_id;
+      $('catch-up-status').textContent=`${batch.queued} observations requested${vlmPaused?' · waiting for Resume VLM':''}`;
+      if(batch.done)break;
+    }
+  }catch(e){$('catch-up-status').textContent=e.message;}
+  finally{$('catch-up').disabled=false;}
+};
+let classificationRunning=true,desiredClassification=null;
+function renderClassification(s){
+  desiredClassification={version:s.version??0,running:s.classification_running!==false,recording:s.record_observations!==false};
+  classificationRunning=s.classification_running!==false;
+  $('classification-mode').value=s.record_observations!==false?'record':'preview';
+  $('classification-toggle').textContent=classificationRunning?'Pause classification':'Start classification';
+  $('classification-toggle').disabled=false;
+  $('classification-state').textContent='Control saved · awaiting Uno Q';
+}
+function acknowledgeClassification(s){
+  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
+  $('classification-state').textContent=s.classification_running?(s.record_observations?'Running · recording observations':'Running · preview only'):'Paused · camera on';
+}
+async function setClassification(running){
+  $('classification-toggle').disabled=true;
+  try{
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({classification_running:running,record_observations:$('classification-mode').value==='record'})});
+    if(!r.ok)throw new Error(`Save failed (${r.status})`);
+    renderClassification(await r.json());
+  }catch(e){$('classification-state').textContent=e.message;}
+  finally{$('classification-toggle').disabled=false;}
+}
+if ($('classification-toggle')) $('classification-toggle').onclick=()=>setClassification(!classificationRunning);
+if ($('classification-mode')) $('classification-mode').onchange=()=>setClassification(classificationRunning);
+if ($('classification-toggle')) get('/api/settings').then(renderClassification).catch(e=>{$('classification-state').textContent=e.message;});

@@ -51,7 +51,7 @@ Private imagery, prompts, request IDs, outputs, and measured timings are saved
 outside the repository:
 
 ```text
-/home/ANT.AMAZON.COM/kwehden/.local/state/bolt-rgb/model-benchmarks/20261026T164833Z/
+~/.local/state/bolt-rgb/model-benchmarks/20261026T164833Z/
 ```
 
 ## Lifecycle

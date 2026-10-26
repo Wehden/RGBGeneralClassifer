@@ -168,3 +168,16 @@ node --test tests/js/*.test.cjs
 The actual X11 smoke artifacts and private screenshots are under
 `validation/desktop`; provider comparison summaries are under
 `validation/full-pipeline`. No private camera imagery is committed.
+
+### Upstream integration before the pull request
+
+Integrated upstream `3d2162f`, including board material detection, portable
+device transport, manual VLM controls, and recoverable MJPEG playback. Local
+RGB/depth/IR streams now use that playback controller; switching to the 3D view
+closes the MJPEG connection. Board-specific controls are shown only for the
+board runner, and local observation analysis continues to use SQLite.
+
+Verification after integration: **174 Python tests**, **19 browser unit
+tests**, the upstream Chromium stream-recovery checks, Python compilation,
+JavaScript syntax checks, and the service Docker build passed. The local
+listener remained on `127.0.0.1:8080`.

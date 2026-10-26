@@ -4,7 +4,7 @@ metadata:
   name: rgb-config
   namespace: rgb-classifier
 data:
-  SOURCES_JSON: '{"unoq":{"url":"http://192.168.1.127:8080","label":"Arduino Uno Q","location":""}}'
+  SOURCES_JSON: '{"unoq":{"label":"Arduino Uno Q","location":""}}'
   VLM_ENDPOINTS_JSON: '[{"url":"http://ollama-vlm-pool.ollama.svc.cluster.local:11434","model":"qwen3.5:9b-q4_K_M"}]'
   IMAGE_DIR: /data/images
 ---
@@ -116,7 +116,7 @@ spec:
       labels: {app: rgb-ingest}
     spec:
       automountServiceAccountToken: false
-      nodeSelector: {kubernetes.io/hostname: pragmatic}
+      nodeSelector: {kubernetes.io/arch: amd64}
       securityContext: {runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000}
       containers:
         - name: ingest
@@ -146,10 +146,8 @@ metadata:
   name: rgb-ingest
   namespace: rgb-classifier
 spec:
-  type: NodePort
-  externalTrafficPolicy: Local
   selector: {app: rgb-ingest}
-  ports: [{port: 80, targetPort: web, nodePort: 32081, name: ingest}]
+  ports: [{port: 80, targetPort: web, name: ingest}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -166,6 +164,26 @@ spec:
       http:
         paths:
           - path: /
+            pathType: Prefix
+            backend:
+              service: {name: rgb-web, port: {name: web}}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rgb-device
+  namespace: rgb-classifier
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: laminarauth-laminarauth-strip-identity@kubernetescrd,laminarauth-laminarauth-forwardauth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: rgb.wehden.com
+      http:
+        paths:
+          - path: /api/device/
             pathType: Prefix
             backend:
               service: {name: rgb-web, port: {name: web}}

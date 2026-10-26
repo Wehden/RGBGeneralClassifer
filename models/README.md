@@ -29,3 +29,7 @@ labeled dataset, evaluation, license review, and model adapter.
 vocabulary manifest. It uses the upstream AGPL-3.0 license, retained beside
 the artifact. Source checkpoint and exported graph hashes are distinct and
 recorded in the manifest. See [trial measurements and runtime](../docs/yoloe-trial.md).
+
+The prompted material graph and its complete export provenance are described in
+[materials mode](../docs/materials-mode.md). Its 12-label vocabulary is independent
+of the prompt-free object vocabulary.

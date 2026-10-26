@@ -26,8 +26,8 @@ def validate_event(data, sources):
         if observed.tzinfo is None or observed.timestamp() > datetime.now(timezone.utc).timestamp()+300:
             raise ValueError('Invalid observation time')
         detections = data['detections']
-        if not isinstance(detections, list) or not 1 <= len(detections) <= 100:
-            raise ValueError('Expected 1 to 100 detections')
+        if not isinstance(detections, list) or not 0 <= len(detections) <= 100:
+            raise ValueError('Expected 0 to 100 detections')
         normalized = []
         for d in detections:
             label, score, box = d['label'], float(d['confidence']), d['box']
@@ -45,7 +45,7 @@ def validate_event(data, sources):
                         raise ValueError('Invalid live match')
                 if not isinstance(live['model'],str) or len(live['model'])>120:raise ValueError('Invalid live model')
             track_id=str(UUID(d['track_id'])) if d.get('track_id') else None
-            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id']),**({'track_id':track_id} if track_id else {}),**({'live_value':live} if live is not None else {})})
+            normalized.append({'label':label, 'confidence':score, 'box':box, 'class_id':int(d['class_id']),**({'label_kind':'material'} if data.get('detector',{}).get('config',{}).get('task')=='materials' else {}),**({'track_id':track_id} if track_id else {}),**({'live_value':live} if live is not None else {})})
         detector = data['detector']
         if not isinstance(detector['model'], str) or len(detector['model']) > 120 or not re.fullmatch('[a-f0-9]{64}', detector['sha256']):
             raise ValueError('Invalid model provenance')
@@ -67,6 +67,15 @@ def validate_event(data, sources):
                 raise ValueError('Invalid detector threshold')
             provenance.update(threshold=detector['threshold'],settings_version=int(detector.get('settings_version',0)))
         event = {'event_id':event_id, 'observed_at':observed.astimezone(timezone.utc).isoformat(), 'received_at':datetime.now(timezone.utc).isoformat(), 'source_id':source_id, 'location':source.get('location') or None, 'location_kind':'configured' if source.get('location') else 'unknown', 'detector':provenance, 'detections':normalized, 'opinions':[]}
+        proposals=data.get('detector_proposals',[])
+        if not isinstance(proposals,list) or len(proposals)>100:raise ValueError('Invalid proposals')
+        for proposal in proposals:
+            if not isinstance(proposal,dict) or set(proposal)!={'class_id','label','confidence','box'}:raise ValueError('Invalid proposal fields')
+            if type(proposal['class_id']) is not int or not isinstance(proposal['label'],str) or not 1<=len(proposal['label'])<=100:raise ValueError('Invalid proposal label')
+            if type(proposal['confidence']) not in (int,float) or not math.isfinite(proposal['confidence']) or not 0<=proposal['confidence']<=1:raise ValueError('Invalid proposal score')
+            box=proposal['box']
+            if not isinstance(box,list) or len(box)!=4 or not all(type(v) in (int,float) and math.isfinite(v) and 0<=v<=1 for v in box) or box[0]>=box[2] or box[1]>=box[3]:raise ValueError('Invalid proposal box')
+        event['detector_proposals']=proposals
         if source.get('location_record'):
             event['location_record']=source['location_record']
             event['location_kind']=source['location_record']['method']

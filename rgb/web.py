@@ -7,11 +7,11 @@ import threading
 from uuid import UUID
 from urllib.parse import urlsplit
 
-import requests
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from redis.exceptions import RedisError
 from rgb.events import InvalidEvent, validate_event
 from rgb.store import StaleEvaluation
+from rgb import live
 
 
 def create_app(store, sources=None, ingest_token=None, analysis_models=None, local_runtime=None):
@@ -21,6 +21,12 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
     token = None if local_runtime else ingest_token if ingest_token is not None else os.environ['INGEST_TOKEN']
     if token is not None and len(token) < 32:
         raise ValueError('INGEST_TOKEN must have at least 32 characters')
+    device_tokens = json.loads(os.getenv('DEVICE_TOKENS_JSON','{}'))
+    if any(source not in sources or not isinstance(secret,str) or len(secret)<32
+           for source,secret in device_tokens.items()):
+        raise ValueError('Invalid device credentials')
+    live_cache=live.Cache()
+    app.extensions['live_cache']=live_cache
     slots = threading.BoundedSemaphore(6)
     export_slot = threading.BoundedSemaphore(1)
 
@@ -29,7 +35,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
 
     @app.before_request
     def ingest_only():
-        if not local_runtime and os.getenv('ROLE') == 'ingest' and request.endpoint not in {'ingest', 'health', 'board_policy'}:
+        if not local_runtime and os.getenv('ROLE') == 'ingest' and request.endpoint not in {'ingest', 'health', 'board_policy', 'device_observations', 'device_policy', 'device_live'}:
             return 'Not found', 404
 
     @app.after_request
@@ -37,7 +43,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'same-origin'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
         return response
 
     @app.errorhandler(RedisError)
@@ -106,15 +112,17 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         if token is None:return 'Not found',404
         if not hmac.compare_digest(request.headers.get('Authorization',''), 'Bearer '+token):
             return jsonify(error='Unauthorized'), 401
+        return save_observation(request.get_json(silent=True))
+
+    def save_observation(data):
         try:
-            data=request.get_json(silent=True)
             event, image = validate_event(data, sources)
             loc=store.location_at(event['source_id'],event['observed_at'])
             if loc:event.update(location=loc['label'] or None,location_kind=loc['method'],location_record=loc)
         except InvalidEvent:
             return jsonify(error='Invalid observation'), 400
         row_id, created = store.save(event, image)
-        return jsonify(event_id=event['event_id'], cursor=row_id, created=created), 201 if created else 200
+        return jsonify(event_id=event['event_id'], cursor=row_id, created=created, recorded=row_id is not None), 201 if created else 200
 
     @app.get('/api/settings')
     def settings():
@@ -128,6 +136,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             return jsonify(error='Origin mismatch'), 403
         data=request.get_json(silent=True)
         allowed=[{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'},{'vlm_paused'}]
+        if not local_runtime:allowed.append({'classification_running','record_observations'})
         if local_runtime:allowed.extend([{'selected_model','model_selection_reason'},{'capture_paused'},
                                         {'capture_interval_s'},{'capture_paused','capture_interval_s'}])
         if not isinstance(data,dict) or set(data) not in allowed:
@@ -146,6 +155,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             expected={PRIMARY_MODEL:'restore_primary',FALLBACK_MODEL:'latency_fallback'}
             if data['selected_model'] not in expected or data['model_selection_reason']!=expected[data['selected_model']]:
                 return jsonify(error='Expected supported model with restore_primary or latency_fallback reason'),400
+        if any(type(data[k]) is not bool for k in ['classification_running','record_observations'] if k in data):return jsonify(error='Classification controls must be boolean'),400
         if not all(type(v) in (int,float) and .05<=v<=.99 for k,v in data.items() if k in {'detector_threshold','vlm_threshold'}):
             return jsonify(error='Thresholds must be between 0.05 and 0.99'),400
         if 'capture_paused' in data or 'capture_interval_s' in data:
@@ -163,6 +173,9 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         if not hmac.compare_digest(request.headers.get('Authorization',''),'Bearer '+token):
             return jsonify(error='Unauthorized'),401
         if source_id not in sources:return 'Not found',404
+        return policy_for(source_id)
+
+    def policy_for(source_id):
         return jsonify(settings=store.settings(),refinements=store.refinements(source_id))
 
     @app.post('/api/events/<event_id>/analyze')
@@ -173,8 +186,34 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         except ValueError:return 'Not found',404
         event=store.get(event_id)
         if not event:return 'Not found',404
-        queued=store.request_analysis(event_id)
+        queued=(store.request_analysis(event_id) if local_runtime else
+                store.request_analysis(event_id,actor=actor()))
         return jsonify(status='queued',created=queued),202
+
+    @app.post('/api/detections/<key>/analyze')
+    def analyze_detection(key):
+        if local_runtime:return jsonify(error='Use observation analysis for the local runner'),404
+        if request.headers.get('X-RGB-Request')!='analysis':return jsonify(error='Expected analysis request'),400
+        if not store.analysis_enabled:return jsonify(error='VLM disabled'),503
+        try:key=str(UUID(key))
+        except ValueError:return 'Not found',404
+        raw=store.redis.hget('rgb:detections',key)
+        if not raw:return 'Not found',404
+        detection=json.loads(raw)
+        created=store.request_analysis(detection['scene_id'],[detection['index']],actor=request.headers.get('X-Laminarauth-Identity'))
+        return jsonify(status='queued',created=created,detection_id=key),202
+
+    @app.post('/api/analysis/catch-up')
+    def catch_up():
+        if local_runtime:return jsonify(error='Catch-up is available for board observations'),404
+        if request.headers.get('X-RGB-Request')!='analysis':return jsonify(error='Expected analysis request'),400
+        if not store.analysis_enabled:return jsonify(error='VLM disabled'),503
+        data=request.get_json(silent=True)
+        if not isinstance(data,dict) or set(data)-{'source_id','batch_id'} or data.get('source_id') not in sources:
+            return jsonify(error='Expected configured source'),400
+        try:result=store.catch_up(data['source_id'],data.get('batch_id'),request.headers.get('X-Laminarauth-Identity'))
+        except ValueError:return jsonify(error='Invalid catch-up request'),400
+        return jsonify(result),202
 
     @app.get('/api/detections/<key>/history')
     def detection_history(key):
@@ -250,6 +289,31 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             return 'Image unavailable', 503
         return send_file(path, mimetype='image/jpeg')
 
+    def device_authorized(source_id):
+        expected = device_tokens.get(source_id)
+        return expected and hmac.compare_digest(request.headers.get('Authorization',''), 'Bearer '+expected)
+
+    @app.post('/api/device/<source_id>/observations')
+    def device_observations(source_id):
+        if not device_authorized(source_id):return jsonify(error='Unauthorized'),401
+        data=request.get_json(silent=True)
+        if not isinstance(data,dict) or data.get('source_id')!=source_id:
+            return jsonify(error='Source mismatch'),400
+        return save_observation(data)
+
+    @app.get('/api/device/<source_id>/policy')
+    def device_policy(source_id):
+        if not device_authorized(source_id):return jsonify(error='Unauthorized'),401
+        return policy_for(source_id)
+
+    @app.post('/api/device/<source_id>/live')
+    def device_live(source_id):
+        if not device_authorized(source_id):return jsonify(error='Unauthorized'),401
+        try:frame=live.validate(request.get_json(silent=True),source_id)
+        except ValueError:return jsonify(error='Invalid live frame'),400
+        live_cache.put(source_id,frame)
+        return jsonify(source_id=source_id,accepted=True)
+
     @app.get('/api/live/<source_id>/status')
     def status(source_id):
         if source_id not in sources:
@@ -259,43 +323,15 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             return jsonify({**result,'inference_ms':result['detector'].get('detector_ms'),'fps':result['capture_fps'],
                             'model':result['detector'].get('model'),'detector_config':{'runtime':'ONNX CPU'},
                             'detections':result['detector'].get('count',0)})
-        try:
-            response = requests.get(sources[source_id]['url'].rstrip('/')+'/healthz', timeout=3)
-            return jsonify(response.json()), response.status_code
-        except (requests.RequestException, ValueError):
-            return jsonify(error='Camera unavailable'), 503
+        frame=live_cache.read(source_id)
+        if frame is None:return jsonify(error='Camera unavailable'),503
+        return jsonify(frame['status'])
 
     @app.get('/api/live/<source_id>/stream')
     def stream(source_id):
-        if source_id not in sources:
-            return 'Not found', 404
+        if source_id not in sources:return 'Not found',404
         if local_runtime:return camera_api.stream_response('color',overlay=True)
-        if not slots.acquire(blocking=False):
-            return 'Viewer limit reached', 429
-        try:
-            upstream = requests.get(sources[source_id]['url'].rstrip('/')+'/stream', timeout=(3,15), stream=True)
-            upstream.raise_for_status()
-        except requests.RequestException:
-            slots.release()
-            return 'Camera unavailable', 503
-        released = False
-        def close_upstream():
-            nonlocal released
-            if not released:
-                released = True
-                upstream.close()
-                slots.release()
-        def generate():
-            try:
-                for chunk in upstream.iter_content(16384):
-                    yield chunk
-            except requests.RequestException:
-                return
-            finally:
-                close_upstream()
-        response = Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-        response.call_on_close(close_upstream)
-        return response
+        return live.response(live_cache,source_id,slots)
 
     if local_runtime:
         from rgb.camera_api import CameraAPI

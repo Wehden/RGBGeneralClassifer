@@ -36,10 +36,21 @@ jobs:
           node --check rgb/static/app.js
           node --check rgb/static/records.js
           node --check rgb/static/pointcloud.js
+          node --check rgb/static/live-video.js
       - name: Test browser behavior
         run: node --test tests/js/*.test.cjs
+      - name: Install browser test dependencies
+        run: |
+          npm ci
+          # Hosted Ubuntu runners already provide Chromium runtime libraries.
+          npx playwright install --only-shell chromium
+      - name: Exercise live video recovery in Chromium
+        run: npm run test:browser
       - name: Verify pinned model
-        run: echo '2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b  models/efficientdet-lite0.tflite' | sha256sum -c -
+        run: |
+          echo '2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b  models/efficientdet-lite0.tflite' | sha256sum -c -
+          echo '8120cf9b3f3cf1dfbbc768b2eb869b48a18f6958f7272e1ba59258c1030ae806  models/yoloe-26n-pf-320/model.onnx' | sha256sum -c -
+          echo '23960eb842490d643721b1bd14c5c8491798343d91b3320e6511a4d5388a6bcf  models/yoloe-26n-materials-320/model.onnx' | sha256sum -c -
       - name: Build service
         run: docker build -t rgb-classifier:ci .
       - name: Retain test results

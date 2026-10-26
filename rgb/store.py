@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4, uuid5
 from common.display import value
 
-DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','vlm_paused':False,'version':0}
+DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','vlm_paused':False,'classification_running':True,'record_observations':True,'version':0}
 
 APPEND = """
 local existing = redis.call('HGET', KEYS[1], ARGV[1])
@@ -16,6 +16,10 @@ if existing then return {existing, 0} end
 local id = redis.call('XADD', KEYS[2], '*', 'event', ARGV[2])
 redis.call('HSET', KEYS[1], ARGV[1], id)
 redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+local latest = redis.call('HGET', KEYS[4], ARGV[4])
+if not latest or tonumber(cjson.decode(latest).captured) < tonumber(ARGV[5]) then
+ redis.call('HSET', KEYS[4], ARGV[4], cjson.encode({event_id=ARGV[1],captured=tonumber(ARGV[5]),row_id=id}))
+end
 return {id, 1}
 """
 INITIAL = """
@@ -26,13 +30,10 @@ redis.call('XADD', KEYS[3], '*', 'kind', 'initial', 'value', ARGV[2])
 return 1
 """
 REQUEST = """
-local state = redis.call('HGET', KEYS[1], ARGV[1])
-if state then
- local s = cjson.decode(state)
- if s.status == 'queued' or s.status == 'running' or s.status == 'paused' then return 0 end
-end
+if redis.call('HEXISTS', KEYS[3], ARGV[4]) == 1 then return 0 end
+redis.call('HSET', KEYS[3], ARGV[4], ARGV[3])
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-redis.call('XADD', KEYS[2], '*', 'event_id', ARGV[1], 'job_id', ARGV[3])
+redis.call('XADD', KEYS[2], '*', 'event_id', ARGV[1], 'job_id', ARGV[3], 'box_indices', ARGV[5], 'pending_key', ARGV[4])
 return 1
 """
 ENHANCE = """
@@ -155,7 +156,25 @@ class Store:
         """
         return json.loads(self.redis.eval(script,3,'rgb:settings:version','rgb:settings','rgb:settings-updates',json.dumps({**values,'changed_at':now(),'actor':actor}),json.dumps(DEFAULT_SETTINGS)))
 
+    def settings_at(self,observed_at):
+        captured=datetime.fromisoformat(observed_at)
+        selected=dict(DEFAULT_SETTINGS)
+        for _,fields in self.stream('rgb:settings-updates'):
+            revision=json.loads(fields['value'])
+            if datetime.fromisoformat(revision['changed_at'])<=captured:
+                selected={**DEFAULT_SETTINGS,**revision}
+        return selected
+
+    def capture_policy(self,event):
+        if 'analysis_policy' in event:return event['analysis_policy']
+        settings=self.settings_at(event['observed_at'])
+        return {'automatic':not settings['vlm_paused'],'vlm_paused':settings['vlm_paused'],'settings_version':settings['version']}
+
     def save(self,event,image):
+        capture_settings=self.settings_at(event['observed_at'])
+        if not capture_settings['classification_running'] or not capture_settings['record_observations']:
+            return None,False
+        event['analysis_policy']=self.capture_policy(event)
         digest=hashlib.sha256(image).hexdigest()
         path=self.root/(digest+'.jpg')
         if not path.exists():
@@ -167,8 +186,8 @@ class Store:
             finally:
                 tmp.unlink(missing_ok=True)
         event['image_sha256']=digest
-        state={'status':'queued' if self.analysis_enabled else 'disabled','schema_version':2}
-        row_id,created=self.redis.eval(APPEND,3,'rgb:ids','rgb:events','rgb:analysis',event['event_id'],json.dumps(event),json.dumps(state))
+        state={'status':('queued' if event['analysis_policy']['automatic'] else 'manual_only') if self.analysis_enabled else 'disabled','schema_version':3,'capture_policy':event['analysis_policy']}
+        row_id,created=self.redis.eval(APPEND,4,'rgb:ids','rgb:events','rgb:analysis','rgb:latest',event['event_id'],json.dumps(event),json.dumps(state),event['source_id'],datetime.fromisoformat(event['observed_at']).timestamp())
         # Initial scene is durable first; deterministic IDs let a retry repair any
         # interrupted per-detection initialization without duplicating stream entries.
         original=self.raw(event['event_id'])
@@ -185,7 +204,7 @@ class Store:
         event=self.raw(event['event_id']) or event
         for index,d in enumerate(event['detections']):
             key=detection_id(event['event_id'],index)
-            initial={'detection_id':key,'scene_id':event['event_id'],'source_id':event['source_id'],'index':index,'observed_at':event['observed_at'],'recorded_at':now(),'initial':d,'candidate':None}
+            initial={'detection_id':key,'scene_id':event['event_id'],'source_id':event['source_id'],'index':index,'observed_at':event['observed_at'],'recorded_at':now(),'initial':d,'candidate':None,'analysis_policy':event.get('analysis_policy')}
             self.redis.eval(INITIAL,3,'rgb:detections','rgb:detection-updates','rgb:detection:'+key+':events',key,json.dumps(initial))
 
     def get(self,event_id):
@@ -211,9 +230,41 @@ class Store:
         rows=self.event_rows(maximum='('+before if before else '+',count=limit)
         return [{'cursor':row,**self.get(json.loads(fields['event'])['event_id'])} for row,fields in rows]
 
-    def request_analysis(self,event_id):
-        state={'status':'queued','schema_version':2,'queued_at':now()}
-        return bool(self.redis.eval(REQUEST,2,'rgb:analysis','rgb:analysis:requests',event_id,json.dumps(state),str(uuid4())))
+    def request_analysis(self,event_id,indices=None,request_id=None,actor=None):
+        pending=event_id+(':'+','.join(map(str,indices)) if indices is not None else ':all')
+        job_id=request_id or str(uuid4())
+        state={'status':'queued','schema_version':3,'queued_at':now(),'manual':True,'job_id':job_id,'box_indices':indices}
+        created=bool(self.redis.eval(REQUEST,3,'rgb:analysis','rgb:analysis:requests','rgb:manual:pending',event_id,json.dumps(state),job_id,pending,json.dumps(indices)))
+        if created:
+            self.redis.xadd('rgb:analysis-actions',{'value':json.dumps({'kind':'manual_request','event_id':event_id,'job_id':job_id,'box_indices':indices,'actor':actor,'requested_at':state['queued_at']})})
+        return created
+
+    def catch_up(self,source_id,batch_id=None,actor=None):
+        if batch_id is None:
+            batch_id=str(uuid4())
+            last=self.redis.xrevrange('rgb:events',count=1)
+            batch={'batch_id':batch_id,'source_id':source_id,'actor':actor,'created_at':now(),
+                   'ceiling':last[0][0] if last else '0-0','cursor':'0-0','queued':0,'scanned':0,'done':False}
+        else:
+            raw=self.redis.hget('rgb:catchups',batch_id)
+            if not raw:raise ValueError('Unknown catch-up batch')
+            batch=json.loads(raw)
+            if batch['source_id']!=source_id:raise ValueError('Catch-up source mismatch')
+        if not batch['done']:
+            rows=self.redis.xrange('rgb:events',min='('+batch['cursor'],max=batch['ceiling'],count=100)
+            for row,fields in rows:
+                raw=json.loads(fields['event'])
+                if raw['source_id']==source_id:
+                    event=self.get(raw['event_id'])
+                    missing=[i for i,d in enumerate(event['detections']) if not d.get('enhancement')]
+                    if missing:
+                        batch['queued']+=self.request_analysis(raw['event_id'],missing,'catchup:'+batch_id+':'+raw['event_id'],batch['actor'])
+                batch['cursor']=row
+                batch['scanned']+=1
+            batch['done']=not rows or batch['cursor']==batch['ceiling']
+        self.redis.hset('rgb:catchups',batch_id,json.dumps(batch))
+        self.redis.xadd('rgb:analysis-actions',{'value':json.dumps({'kind':'catch_up',**batch})})
+        return batch
 
     def history(self,key):
         return [{'cursor':row,**json.loads(fields['value']),'kind':fields['kind']} for row,fields in reversed(self.redis.xrevrange('rgb:detection:'+key+':events',count=100))]

@@ -83,6 +83,27 @@ def test_stale_camera_leaves_status_health_archive_available(local):
     assert client.get('/api/camera/status').status_code==200
     assert client.get('/healthz').status_code==200
     assert client.get('/api/events/'+event['event_id']).status_code==200
+
+
+def test_local_dashboard_and_manual_analysis_keep_sqlite_backend(local):
+    store,camera,frame,result,runtime,app=local
+    client=app.test_client()
+    page=client.get('/').data
+    assert b'/static/live-video.js' in page and b'/static/pointcloud.js' in page
+    assert b'id="pause-capture"' in page
+    assert b'id="classification-toggle"' not in page
+    assert b'id="catch-up"' not in page
+    event=runtime.archive(frame,result)
+    endpoint='/api/events/'+event['event_id']+'/analyze'
+    assert client.post(endpoint).status_code==400
+    assert client.post(endpoint,headers={'X-RGB-Request':'analysis'}).status_code==202
+    assert store.queued_manual()['event_id']==event['event_id']
+    assert client.post(endpoint,headers={'X-RGB-Request':'analysis'}).json['created'] is False
+    assert client.post('/api/settings',json={'classification_running':False,'record_observations':False},
+                       headers={'X-RGB-Request':'settings'}).status_code==400
+    key=detection_id(event['event_id'],0)
+    assert client.post('/api/detections/'+key+'/analyze').status_code==404
+    assert client.post('/api/analysis/catch-up').status_code==404
     assert client.get('/api/camera/color/snapshot.jpg?frame_id='+frame.id).status_code==200
     assert client.get('/api/live/femto-bolt/status').status_code==200
 

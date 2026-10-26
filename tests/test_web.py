@@ -79,18 +79,20 @@ def test_duplicate_uuid_cannot_replace_original_evidence(client,event):
 
 
 def test_unconsumed_stream_response_releases_admission(client,monkeypatch):
-    from unittest.mock import Mock
-    c,_=client
-    upstream=Mock()
-    upstream.iter_content.return_value=iter([b'frame'])
-    monkeypatch.setattr('rgb.web.requests.get',lambda *a,**k:upstream)
-    # WSGI may close a response before iterating it. Every admission must return.
+    import time
+    import base64
+    from PIL import Image
+    import io
+    c,store=client
+    jpeg=io.BytesIO()
+    Image.new('RGB',(16,16)).save(jpeg,'JPEG')
+    c.application.extensions['live_cache'].put('portentauno',{'status':{'last_frame':time.time()},'image_b64':base64.b64encode(jpeg.getvalue()).decode(),'expires_at':time.time()+15})
+    # WSGI can close before iteration. Every admission must return to the pool.
     for _ in range(8):
         with c.application.test_request_context('/api/live/portentauno/stream'):
             response=c.application.view_functions['stream']('portentauno')
             assert response.status_code == 200
             response.close()
-    assert upstream.close.call_count == 8
 
 
 def test_threshold_controls_are_validated_and_audited(client):
@@ -161,3 +163,11 @@ def test_export_download_releases_slot_for_next_format(client,event):
         assert response.data.startswith(b'PK')
         assert 'attachment' in response.headers['Content-Disposition']
         response.close()
+
+
+def test_live_decoder_script_and_blob_images_allowed(client):
+    c, _ = client
+    page = c.get('/')
+    assert b'/static/live-video.js' in page.data
+    assert "img-src 'self' blob:" in page.headers['Content-Security-Policy']
+    assert c.get('/static/live-video.js').status_code == 200

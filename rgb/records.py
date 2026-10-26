@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from common.display import value
 from rgb.store import detection_id, now
 
-STATUSES={'paused','queued','running','complete','partial','failed','not_analyzed','disabled'}
+STATUSES={'manual_only','paused','queued','running','complete','partial','failed','not_analyzed','disabled'}
 
 
 def query(store, args):
@@ -40,6 +40,7 @@ def query(store, args):
         raw=json.loads(fields['event'])
         event=store.get(raw['event_id'])
         observed=datetime.fromisoformat(raw['observed_at'])
+        if not event['detections']:last=stream_id+':0'
         for i,d in enumerate(event['detections']):
             if stream_id==row_id and i<=index:continue
             last=stream_id+':'+str(i)
@@ -49,9 +50,9 @@ def query(store, args):
             if args.get('location') and args['location'].casefold() not in (raw.get('location') or '').casefold():continue
             c=d['enhancement'] or {}
             if label and not any(label in str(v).casefold() for v in [d['label'],c.get('label','')]):continue
-            if material and not any(material in m['label'].casefold() for m in c.get('materials',[])):continue
+            if material and not (d.get('label_kind')=='material' and material in d['label'].casefold() or any(material in m['label'].casefold() for m in c.get('materials',[]))):continue
             displayed=value(d,c,settings)
-            result.append({'detection_id':detection_id(raw['event_id'],i),'observation_id':raw['event_id'],'track_id':d.get('track_id'),'source_id':raw['source_id'],'location':raw.get('location'),'observed_at':raw['observed_at'],'box':d['box'],'detector_model':raw['detector']['model'],'detector_sha256':raw['detector']['sha256'],'detector_config_json':json.dumps(raw['detector']['config'],sort_keys=True) if 'config' in raw['detector'] else None,'initial_label':d['label'],'initial_class_id':d['class_id'],'initial_confidence':d['confidence'],'enhanced_label':c.get('label'),'enhanced_confidence':c.get('confidence'),'display_label':displayed['label'],'display_confidence':displayed['confidence'],'display_mode':settings['display_mode'],'materials':c.get('materials'),'model':c.get('model'),'attempt_id':c.get('attempt_id'),'analysis_status':event['analysis']['status']})
+            result.append({'detection_id':detection_id(raw['event_id'],i),'observation_id':raw['event_id'],'track_id':d.get('track_id'),'source_id':raw['source_id'],'location':raw.get('location'),'observed_at':raw['observed_at'],'box':d['box'],'detector_model':raw['detector']['model'],'detector_sha256':raw['detector']['sha256'],'detector_config_json':json.dumps(raw['detector']['config'],sort_keys=True) if 'config' in raw['detector'] else None,'initial_label':d['label'],'initial_label_kind':d.get('label_kind','object'),'initial_class_id':d['class_id'],'initial_confidence':d['confidence'],'enhanced_label':c.get('label'),'enhanced_confidence':c.get('confidence'),'display_label':displayed['label'],'display_confidence':displayed['confidence'],'display_mode':settings['display_mode'],'materials':c.get('materials'),'model':c.get('model'),'attempt_id':c.get('attempt_id'),'analysis_status':event['analysis']['status']})
             result[-1].update(frame_id=raw.get('frame_id'),session_id=raw.get('session_id'),depth=d.get('depth'),
                               calibration_sha256=raw.get('frame_metadata',{}).get('calibration_sha256'),
                               sensor_assets=raw.get('sensor_assets'))
@@ -64,7 +65,7 @@ def download(records, format):
     import pyarrow as pa
     import pyarrow.parquet as pq
     material=pa.struct([('label',pa.string()),('confidence',pa.float64()),('reason',pa.string())])
-    schema=pa.schema([(key,pa.string()) for key in ['detection_id','observation_id','track_id','source_id','location','detector_model','detector_sha256','detector_config_json']]+[('observed_at',pa.timestamp('us',tz='UTC')),('box',pa.list_(pa.float64(),4)),('initial_label',pa.string()),('initial_class_id',pa.int32()),('initial_confidence',pa.float64()),('enhanced_label',pa.string()),('enhanced_confidence',pa.float64()),('display_label',pa.string()),('display_confidence',pa.float64()),('display_mode',pa.string()),('materials',pa.list_(material)),('model',pa.string()),('attempt_id',pa.string()),('analysis_status',pa.string())])
+    schema=pa.schema([(key,pa.string()) for key in ['detection_id','observation_id','track_id','source_id','location','detector_model','detector_sha256','detector_config_json']]+[('observed_at',pa.timestamp('us',tz='UTC')),('box',pa.list_(pa.float64(),4)),('initial_label',pa.string()),('initial_label_kind',pa.string()),('initial_class_id',pa.int32()),('initial_confidence',pa.float64()),('enhanced_label',pa.string()),('enhanced_confidence',pa.float64()),('display_label',pa.string()),('display_confidence',pa.float64()),('display_mode',pa.string()),('materials',pa.list_(material)),('model',pa.string()),('attempt_id',pa.string()),('analysis_status',pa.string())])
     from rgb.export import DEPTH
     schema=pa.schema(list(schema)+[('frame_id',pa.string()),('session_id',pa.string()),('calibration_sha256',pa.string()),('depth',DEPTH),('sensor_assets_json',pa.string())])
     rows=[{**r,'observed_at':datetime.fromisoformat(r['observed_at']),'sensor_assets_json':json.dumps(r['sensor_assets']) if r.get('sensor_assets') else None} for r in records]

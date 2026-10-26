@@ -13,7 +13,7 @@ class Element {
 }
 function setup(){
   const nodes=new Map();
-  const context=vm.createContext({document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
+  const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){this.url=null;} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag)},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
   vm.runInContext(fs.readFileSync('rgb/static/app.js','utf8'),context);
   return {context,node:id=>context.document.getElementById(id)};
 }
@@ -133,4 +133,65 @@ test('capture interval input validation avoids an invalid settings request',asyn
   context.fetch=async()=>{calls++;return json({});};
   node('capture-interval').value='0';await node('apply-capture-interval').onclick();
   assert.equal(calls,0);assert.match(node('capture-state').textContent,/1 to 86400/);
+});
+
+test('local classification preview sends no-recording policy independently of VLM',async()=>{
+  const {context,node}=setup();
+  node('classification-mode').value='preview';
+  let request;
+  context.fetch=async(url,options)=>{request={url,body:JSON.parse(options.body)};return json({classification_running:true,record_observations:false});};
+  await context.setClassification(true);
+  assert.equal(request.url,'/api/settings');
+  assert.deepEqual(request.body,{classification_running:true,record_observations:false});
+  assert.equal(node('classification-state').textContent,'Control saved · awaiting Uno Q');
+  context.acknowledgeClassification({classification_running:true,record_observations:false,applied_settings_version:0});
+  assert.equal(node('classification-state').textContent,'Running · preview only');
+  assert.equal(request.body.vlm_paused,undefined);
+});
+
+test('catch up keeps one snapshot and source across pages',async()=>{
+  const {context,node}=setup();
+  node('source').value='unoq';
+  const bodies=[];
+  context.fetch=async(url,options)=>{bodies.push(JSON.parse(options.body));return json({batch_id:'batch',queued:bodies.length,done:bodies.length===2});};
+  await node('catch-up').onclick();
+  assert.deepEqual(bodies,[{source_id:'unoq'},{source_id:'unoq',batch_id:'batch'}]);
+  assert.equal(node('catch-up').disabled,false);
+});
+
+test('healthy camera status cannot hide a stalled image connection',async()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'unoq'}]",context);node('source').value='unoq';
+  context.live();assert.equal(node('live-state').textContent,'Connecting live frame…');
+  node('live-state').textContent='Stale · showing last frame · reconnecting';
+  context.fetch=async()=>json({inference_ms:320});await context.status();
+  assert.equal(node('live-state').textContent,'Stale · showing last frame · reconnecting');
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/live/unoq/stream');
+});
+
+test('local depth and IR use recoverable streams; switching to 3D releases the stream',()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'femto-bolt',local:true}]",context);
+  node('source').value='femto-bolt';node('camera-channel').value='depth';
+  context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/camera/depth/stream');
+  node('camera-channel').value='pointcloud';context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),null);
+  assert.equal(node('live').hidden,true);
+  node('camera-channel').value='ir';context.live();
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/camera/ir/stream');
+  assert.equal(node('live').hidden,false);
+  assert.equal(node('pointcloud-view').hidden,true);
+});
+
+test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{
+  const {context,node}=setup();let gets=0,timers=0;
+  context.setTimeout=()=>{timers++;return 1;};
+  const event={analysis:{status:'complete'},detections:[{detection_id:'box',box:[0,0,1,1],display_label:'pen',label:'pen',label_provider:'detector',review_context:{}}],opinions:[],detector:{model:'yoloe'},settings:{display_mode:'objects'},event_id:'scene'};
+  context.fetch=async(url,options)=>{if(options){event.analysis.status='queued';return json({});}gets++;return json(event);};
+  await context.show('scene');
+  const card=node('detail').children.find(c=>c.className==='reading');
+  await card.children.find(c=>c.tag==='button').onclick();
+  assert.equal(gets,2);assert.equal(timers,1);
+  assert.match(node('detail').querySelector('.analysis-state').textContent,/queued/);
 });

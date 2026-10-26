@@ -5,11 +5,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from ai_edge_litert.interpreter import Interpreter
 
 
 class Detector:
     def __init__(self, model, labels, threshold=0.45):
+        from ai_edge_litert.interpreter import Interpreter
         self.labels = Path(labels).read_text().splitlines()
         self.threshold = threshold
         self.interpreter = Interpreter(model_path=model, num_threads=int(os.getenv("INFERENCE_THREADS", "2")))

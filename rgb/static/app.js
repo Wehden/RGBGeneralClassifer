@@ -5,7 +5,7 @@ function element(tag, text, cls) { const e = document.createElement(tag); if (te
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
 function date(value) { return new Date(value).toLocaleString(); }
 async function status() {
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('live-state').textContent = s.error ? s.error : 'LIVE'; $('timing').textContent = `${s.inference_ms ?? '?'} ms inference`; }
+  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('live-state').textContent = s.error ? s.error : 'LIVE'; $('timing').textContent = `${s.inference_ms ?? '?'} ms inference`; if(s.model)$('detector-model').textContent=`Detection: ${s.model} · Uno Q ${s.detector_config?.runtime ?? 'CPU'}`; }
   catch { $('live-state').textContent = 'Camera unavailable · reconnecting'; $('timing').textContent = ''; }
 }
 function live() {
@@ -76,6 +76,7 @@ $('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('s
 let vlmPaused=false,vlmChanging=false,vlmGeneration=0;
 function renderVlm(state) {
   vlmPaused=state.paused;
+  $('vlm-model').textContent=`Label refinement: ${(state.models||[]).join(', ')||'Disabled'}`;
   $('pause-vlm').textContent=state.paused?'Resume VLM':'Pause VLM';
   $('pause-vlm').disabled=vlmChanging||!state.enabled;
   $('vlm-state').textContent=!state.enabled?'VLM disabled':state.paused?(state.active?'Paused · current request finishing':'Paused · VLM idle'):state.active?'Running · processing request':'Running · waiting for work';

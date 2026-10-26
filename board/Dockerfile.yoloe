@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=rgb-classifier:board-base
+FROM ${BASE_IMAGE}
+USER root
+RUN pip install --no-cache-dir onnxruntime==1.24.4
+COPY board /app/board
+COPY models/yoloe-26n-pf-320 /app/models/yoloe-26n-pf-320
+USER 1000:1000
+CMD ["python", "-m", "board.main"]

@@ -2,6 +2,7 @@
 import base64
 import binascii
 import io
+import json
 import math
 import re
 from datetime import datetime, timezone
@@ -57,6 +58,10 @@ def validate_event(data, sources):
                 raise ValueError('Expected bounded JPEG')
             image.verify()
         provenance = {'model':detector['model'], 'sha256':detector['sha256']}
+        if 'config' in detector:
+            config=detector['config']
+            if not isinstance(config,dict) or len(json.dumps(config,allow_nan=False))>65536:raise ValueError('Invalid detector configuration')
+            provenance['config']=config
         if 'threshold' in detector:
             if type(detector['threshold']) not in (int,float) or not .05<=detector['threshold']<=.99:
                 raise ValueError('Invalid detector threshold')

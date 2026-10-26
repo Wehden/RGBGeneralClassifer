@@ -31,11 +31,20 @@ viewers = threading.BoundedSemaphore(4)
 SOURCE = os.getenv('SOURCE_ID', 'portentauno')
 LOCATION = os.getenv('SOURCE_LOCATION', '')
 MAX_FPS = float(os.getenv('MAX_FPS', '2'))
-if not 0.1 <= MAX_FPS <= 30:
-    raise ValueError('MAX_FPS must be between 0.1 and 30')
+if MAX_FPS!=0 and not 0.1 <= MAX_FPS <= 30:
+    raise ValueError('MAX_FPS must be zero (uncapped) or between 0.1 and 30')
 cv2.setNumThreads(1)
-MODEL = 'efficientdet-lite0-coco-uint8'
-MODEL_SHA = hashlib.sha256(open('/app/models/efficientdet-lite0.tflite', 'rb').read()).hexdigest()
+BACKEND = os.getenv('DETECTOR_BACKEND','litert')
+if BACKEND=='yoloe':
+    from board.yoloe import Detector as YOLOEDetector
+    detector = YOLOEDetector(os.environ['YOLOE_MODEL'],os.environ['YOLOE_MANIFEST'])
+elif BACKEND=='litert':
+    detector = Detector('/app/models/efficientdet-lite0.tflite','/app/models/labelmap.txt')
+else:raise ValueError('Expected litert or yoloe detector backend')
+MODEL = getattr(detector,'model','efficientdet-lite0-coco-uint8')
+MODEL_SHA = getattr(detector,'sha256',None) or hashlib.sha256(open('/app/models/efficientdet-lite0.tflite','rb').read()).hexdigest()
+DETECTOR_CONFIG = getattr(detector,'config',{'runtime':'litert','runtime_version':'2.1.6','input_size':320,'inference_threads':int(os.getenv('INFERENCE_THREADS','2'))})
+DETECTOR_CONFIG={**DETECTOR_CONFIG,'capture_limit_fps':MAX_FPS or None}
 policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'display_mode': 'objects', 'version': 0}, 'refinements': None}
 DB = os.getenv('OUTBOX_DB', '/data/outbox.sqlite3')
 
@@ -60,7 +69,6 @@ def camera():
 
 
 def capture():
-    detector = Detector('/app/models/efficientdet-lite0.tflite', '/app/models/labelmap.txt')
     tracker = Tracker()
     cap = None
     last_event = 0
@@ -102,7 +110,7 @@ def capture():
             if detections and now-last_event >= 15:
                 raw_ok, raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if raw_ok:
-                    event = {'event_id': str(uuid.uuid4()), 'observed_at': datetime.now(timezone.utc).isoformat(), 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': MODEL, 'sha256': MODEL_SHA, 'threshold': detector.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'image_b64': base64.b64encode(raw).decode()}
+                    event = {'event_id': str(uuid.uuid4()), 'observed_at': datetime.now(timezone.utc).isoformat(), 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': MODEL, 'sha256': MODEL_SHA, 'config': DETECTOR_CONFIG, 'threshold': detector.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'image_b64': base64.b64encode(raw).decode()}
                     with database() as conn:
                         size = conn.execute('SELECT COUNT(*) FROM outbox').fetchone()[0]
                         if size < 500:
@@ -110,7 +118,7 @@ def capture():
                         else:
                             log.error('Outbox full; new observation skipped')
                     last_event = now
-            time.sleep(max(0, 1/MAX_FPS-(time.monotonic()-frame_start)))
+            if MAX_FPS:time.sleep(max(0, 1/MAX_FPS-(time.monotonic()-frame_start)))
         except Exception as exc:
             log.warning('Capture: %s', exc)
             state['error'] = str(exc)
@@ -161,7 +169,7 @@ def deliver():
 def health():
     with condition:
         result = {k:v for k,v in state.items() if k != 'jpeg'}
-    result.update(source_id=SOURCE, model=MODEL, model_sha256=MODEL_SHA, settings=policy['settings'])
+    result.update(source_id=SOURCE, model=MODEL, model_sha256=MODEL_SHA, detector_config=DETECTOR_CONFIG, settings=policy['settings'])
     return jsonify(result), 200 if time.time()-result['last_frame'] < 15 else 503
 
 

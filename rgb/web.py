@@ -321,7 +321,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         if local_runtime:
             result=local_runtime.camera.status()
             return jsonify({**result,'inference_ms':result['detector'].get('detector_ms'),'fps':result['capture_fps'],
-                            'model':result['detector'].get('model'),'detector_config':{'runtime':'ONNX CPU'},
+                             'model':result['detector'].get('model'),'detector_config':result['detector'].get('config',{'runtime':'ONNX CPU'}),
                             'detections':result['detector'].get('count',0)})
         frame=live_cache.read(source_id)
         if frame is None:return jsonify(error='Camera unavailable'),503

@@ -3,6 +3,10 @@
 
 def value(initial, candidate, settings):
     if settings.get('display_mode', 'objects') == 'materials':
+        local=initial.get('local_material')
+        if local:
+            return {'label':local['label'] if local['status']=='identified' else 'Material uncertain',
+                    'confidence':None,'provider':'siglip2'}
         readings = [m for m in (candidate or {}).get('materials', []) if m['confidence'] >= settings['vlm_threshold']]
         empty = ('No material above threshold' if 'materials' in (candidate or {}) else 'Materials not read') if candidate else 'Materials pending'
         if not readings and initial.get('label_kind')=='material':

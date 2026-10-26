@@ -144,7 +144,7 @@ class CameraAPI:
                             color=cv2.cvtColor(f.color_rgb,cv2.COLOR_RGB2BGR)
                             for d in result['detections']:
                                 x1,y1,x2,y2=bounds(d['box'],color.shape[1],color.shape[0])
-                                label=d.get('live_value',{}).get('display_label',d['label'])
+                                label=d.get('display_label',d.get('live_value',{}).get('display_label',d['label']))
                                 cv2.rectangle(color,(x1,y1),(x2,y2),(50,220,90),2)
                                 cv2.putText(color,label,(x1,max(15,y1-5)),cv2.FONT_HERSHEY_SIMPLEX,.5,(50,220,90),1)
                             image=jpg(color)
@@ -165,6 +165,11 @@ class CameraAPI:
         if not isinstance(data,dict) or set(data)-{'frame_id'}:return jsonify(error='Expected optional frame_id'),400
         frame,error=self._frame(data)
         if error:return error
+        if 'frame_id' not in data:
+            with self.camera.condition:latest=self.camera.latest_detection
+            if (latest and latest[0].metadata['session_id']==frame.metadata['session_id']
+                    and time.monotonic()-latest[0].metadata['received_monotonic_s']<=self.camera.freshness_s):
+                frame=latest[0]
         try:event=self.runtime.archive(frame)
         except RuntimeError as exc:return jsonify(error=str(exc)),429
         return jsonify(observation_id=event['event_id'],event_id=event['event_id'],frame_id=event['frame_id']),201

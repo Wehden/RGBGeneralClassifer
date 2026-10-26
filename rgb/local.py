@@ -33,7 +33,16 @@ def parser():
     p.add_argument('--display-mode',choices=['objects','materials'],default=os.environ.get('RGB_DISPLAY_MODE'))
     p.add_argument('--no-vlm',action='store_true')
     p.add_argument('--capture-fps',type=int,choices=[5,15,25,30],default=int(os.environ.get('RGB_CAPTURE_FPS','15')))
-    p.add_argument('--detector-fps',type=float,default=float(os.environ.get('RGB_DETECTOR_FPS','5')))
+    p.add_argument('--detector-fps',type=float,default=float(os.environ.get('RGB_DETECTOR_FPS','2')))
+    p.add_argument('--detector-model-dir',default=os.environ.get('RGB_DETECTOR_MODEL_DIR'),
+                   help='Directory containing verified model.onnx and manifest.json')
+    p.add_argument('--detector-backend',choices=['onnxruntime','openvino'],
+                   default=os.environ.get('RGB_DETECTOR_BACKEND','onnxruntime'))
+    p.add_argument('--detector-device',choices=['CPU','GPU'],default=os.environ.get('RGB_DETECTOR_DEVICE','CPU'))
+    p.add_argument('--detector-threads',type=int,default=int(os.environ.get('RGB_DETECTOR_THREADS','4')))
+    p.add_argument('--materials-model-dir',default=os.environ.get('RGB_MATERIALS_MODEL_DIR'))
+    p.add_argument('--materials-device',choices=['CPU','GPU'],default=os.environ.get('RGB_MATERIALS_DEVICE','CPU'))
+    p.add_argument('--no-local-materials',action='store_true',help='Disable the local SigLIP2 crop worker')
     p.add_argument('--archive-interval',type=float,default=os.environ.get('RGB_ARCHIVE_INTERVAL'),
                    help='Seconds between automatic observations and their live VLM analysis (default: saved setting or 60)')
     p.add_argument('--vlm-min-interval',type=float,default=float(os.environ.get('RGB_VLM_MIN_INTERVAL','0')))
@@ -55,6 +64,9 @@ def main():
     if any(value is not None and (not math.isfinite(value) or not .05<=value<=.99) for value in [args.detector_threshold,args.vlm_threshold]):
         raise SystemExit('Thresholds must be finite and between 0.05 and 0.99')
     if not math.isfinite(args.max_skew_ms) or args.max_skew_ms<0:raise SystemExit('Invalid channel skew tolerance')
+    if not 1<=args.detector_threads<=64:raise SystemExit('Detector threads must be between 1 and 64')
+    if args.detector_backend=='onnxruntime' and args.detector_device!='CPU':
+        raise SystemExit('ONNX Runtime detector requires CPU')
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
     # Claim the archive before recovery can modify interrupted-job records.
     camera=Camera(serial=args.camera_serial,backend=args.camera_backend,device=args.camera_device,
@@ -80,7 +92,11 @@ def main():
         raise SystemExit('Invalid saved capture controls')
     runtime=LocalRuntime(store,camera,profile=args.aws_profile,region=args.aws_region,detector_fps=args.detector_fps,
                          min_interval=args.vlm_min_interval,
-                         read_timeout=args.read_timeout,connect_timeout=args.connect_timeout,max_tokens=args.max_tokens)
+                         read_timeout=args.read_timeout,connect_timeout=args.connect_timeout,max_tokens=args.max_tokens,
+                         detector_dir=args.detector_model_dir,detector_backend=args.detector_backend,
+                         detector_device=args.detector_device,detector_threads=args.detector_threads,
+                         material_dir=args.materials_model_dir,material_device=args.materials_device,
+                         local_materials=not args.no_local_materials)
     runtime.configuration.update(host=args.host,port=args.port,camera_backend=args.camera_backend,
                                  camera_serial=args.camera_serial,capture_fps=args.capture_fps,
                                  max_channel_skew_ms=camera.skew_ms,freshness_s=camera.freshness_s,

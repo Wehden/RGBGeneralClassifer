@@ -64,7 +64,12 @@ async function show(id, refresh=false) {
     }
     event.detections.forEach((d,i) => {
       const card = element('section',undefined,'reading'); const c = d.enhancement;
-      card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'Qwen'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
+      card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'siglip2' ? 'SigLIP2' : d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'Qwen'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
+      if(d.local_material) {
+        const m=d.local_material;
+        card.append(element('p',`Local material: ${m.status==='identified'?m.label:'uncertain'} · best visual match ${m.best_candidate} · similarity ${m.similarity.toFixed(3)} · margin ${m.margin.toFixed(3)} · uncalibrated`,'comparison'));
+        if(m.crop_asset){const crop=element('details');crop.append(element('summary','Material classifier crop'));const img=element('img');img.src=`/api/events/${id}/assets/material_crop_${i}`;img.alt='RGB crop used by SigLIP2';img.className='sensor-preview';crop.append(img,element('p',`Read from frame ${m.source_frame_id} · ${m.model}`,'muted'));card.append(crop);}
+      }
       if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));
       if (event.settings.display_mode === 'materials' && c?.materials) { for (const m of c.materials) { card.append(element('p',`${m.label} · ${(m.confidence*100).toFixed(1)}%`,'comparison'),element('p',m.reason)); } }
       if (c && event.settings.display_mode !== 'materials') { card.append(element('p',`${d.label} → ${c.label} · ${c.comparison}`,'comparison'),element('p',c.reason)); if (!d.enhancement_accepted) card.append(element('p',`VLM ${(c.confidence*100).toFixed(1)}% · threshold ${(event.settings.vlm_threshold*100).toFixed(0)}%`,'muted')); }
@@ -109,6 +114,10 @@ function renderCapture(state) {
   if(state.storage?.observations>0&&!$('events').children.length)load();
 }
 function renderVlm(state) {
+  if(state.local_materials&&$('local-material-state')) {
+    const m=state.local_materials;
+    $('local-material-state').textContent=`Local materials: ${m.state}${m.inference_ms==null?'':` · ${m.inference_ms.toFixed(0)} ms per crop`}${m.error?' · '+m.error:''}`;
+  }
   vlmPaused=state.paused;
   $('vlm-model').textContent=`Label refinement: ${(state.models||[]).join(', ')||'Disabled'}`;
   $('pause-vlm').textContent=state.paused?'Resume VLM':'Pause VLM';

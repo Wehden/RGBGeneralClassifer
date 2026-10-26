@@ -1,4 +1,4 @@
-"""CPU ONNX adapter for pinned, end-to-end YOLOE exports."""
+"""Verified end-to-end YOLOE exports using ONNX Runtime or OpenVINO."""
 import hashlib
 import json
 import os
@@ -37,8 +37,7 @@ def decode(output,labels,shape,transform,threshold):
 
 
 class Detector:
-    def __init__(self,model,manifest,threshold=.45):
-        import onnxruntime as ort
+    def __init__(self,model,manifest,threshold=.45,backend='onnxruntime',device='CPU',threads=None):
         self.threshold=threshold
         self.manifest=json.loads(Path(manifest).read_text())
         self.sha256=hashlib.sha256(Path(model).read_bytes()).hexdigest()
@@ -47,21 +46,40 @@ class Detector:
         if not isinstance(self.labels,list) or not self.labels or not all(isinstance(s,str) and 0<len(s)<=100 for s in self.labels):raise ValueError('Invalid YOLOE vocabulary')
         self.size=self.manifest['input_size']
         self.model=self.manifest['model']
-        options=ort.SessionOptions()
-        options.intra_op_num_threads=int(os.getenv('INFERENCE_THREADS','2'))
-        options.inter_op_num_threads=1
-        options.execution_mode=ort.ExecutionMode.ORT_SEQUENTIAL
-        self.session=ort.InferenceSession(str(model),sess_options=options,providers=['CPUExecutionProvider'])
-        inp=self.session.get_inputs()[0]
-        if inp.shape!=[1,3,self.size,self.size] or inp.type!='tensor(float)':raise ValueError('YOLOE input contract mismatch')
-        self.input_name=inp.name
+        threads=threads if threads is not None else int(os.getenv('INFERENCE_THREADS','2'))
+        if backend=='openvino':
+            import openvino as ov
+            core=ov.Core()
+            graph=core.read_model(str(model))
+            if list(graph.input(0).shape)!=[1,3,self.size,self.size] or graph.input(0).element_type!=ov.Type.f32:
+                raise ValueError('YOLOE input contract mismatch')
+            options={'PERFORMANCE_HINT':'LATENCY','NUM_STREAMS':1,'INFERENCE_PRECISION_HINT':'f32'}
+            if device=='CPU':options['INFERENCE_NUM_THREADS']=threads
+            self.session=core.compile_model(graph,device,options)
+            self.output_port=self.session.output(0)
+            runtime_version=ov.__version__;provider=device
+        elif backend=='onnxruntime':
+            import onnxruntime as ort
+            if device!='CPU':raise ValueError('ONNX adapter supports CPU only')
+            options=ort.SessionOptions()
+            options.intra_op_num_threads=threads
+            options.inter_op_num_threads=1
+            options.execution_mode=ort.ExecutionMode.ORT_SEQUENTIAL
+            self.session=ort.InferenceSession(str(model),sess_options=options,providers=['CPUExecutionProvider'])
+            inp=self.session.get_inputs()[0]
+            if inp.shape!=[1,3,self.size,self.size] or inp.type!='tensor(float)':raise ValueError('YOLOE input contract mismatch')
+            self.input_name=inp.name
+            runtime_version=ort.__version__;provider='CPUExecutionProvider'
+        else:raise ValueError('Unsupported detector backend')
+        self.backend=backend
         vocabulary=json.dumps(self.labels,separators=(',',':'),ensure_ascii=False).encode()
-        self.config={**{k:v for k,v in self.manifest.items() if k!='labels'},'label_count':len(self.labels),'vocabulary_sha256':hashlib.sha256(vocabulary).hexdigest(),'manifest_sha256':hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),'runtime':'onnxruntime','runtime_version':ort.__version__,'provider':'CPUExecutionProvider','inference_threads':options.intra_op_num_threads}
+        self.config={**{k:v for k,v in self.manifest.items() if k!='labels'},'label_count':len(self.labels),'vocabulary_sha256':hashlib.sha256(vocabulary).hexdigest(),'manifest_sha256':hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),'runtime':backend,'runtime_version':runtime_version,'provider':provider,'inference_threads':threads}
 
     def detect(self,frame):
         tensor,transform=prepare(frame,self.size)
         start=time.monotonic()
-        output=self.session.run(None,{self.input_name:tensor})[0]
+        output=(self.session([tensor])[self.output_port] if self.backend=='openvino'
+                else self.session.run(None,{self.input_name:tensor})[0])
         ms=(time.monotonic()-start)*1000
         self.proposals=decode(output,self.labels,frame.shape,transform,0)
         return [dict(p) for p in self.proposals if p['confidence']>=self.threshold],round(ms,2)

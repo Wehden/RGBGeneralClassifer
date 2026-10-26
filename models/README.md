@@ -33,3 +33,11 @@ recorded in the manifest. See [trial measurements and runtime](../docs/yoloe-tri
 The prompted material graph and its complete export provenance are described in
 [materials mode](../docs/materials-mode.md). Its 12-label vocabulary is independent
 of the prompt-free object vocabulary.
+# Local desktop models
+
+The local runner can use YOLOE26 small/medium at 640 px and a SigLIP2 crop
+classifier. Their larger artifacts are installed outside the checkout using
+`scripts/setup-local-vision.py`; see [local setup, benchmarks, and material
+score semantics](../docs/local-vision.md). Source checkpoint hashes and the
+Google revision are pinned in that script, and generated inference manifests
+verify every installed artifact.

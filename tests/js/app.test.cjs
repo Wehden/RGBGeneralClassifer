@@ -184,6 +184,23 @@ test('local depth and IR use recoverable streams; switching to 3D releases the s
   assert.equal(node('pointcloud-view').hidden,true);
 });
 
+test('local material readings are shown as similarity scores, independent of VLM',async()=>{
+  const {context,node}=setup();
+  const local={status:'uncertain',label:null,best_candidate:'plastic',similarity:.321,margin:.003};
+  const event={analysis:{status:'not_analyzed'},frame_id:'local-frame',session_id:'session',
+    detections:[{detection_id:'box',box:[0,0,1,1],display_label:'Material uncertain',label:'bottle',
+      label_provider:'siglip2',display_confidence:null,local_material:local,review_context:{}}],
+    opinions:[],detector:{model:'yoloe-26s'},settings:{display_mode:'materials'},event_id:'scene'};
+  context.fetch=async()=>json(event);
+  await context.show('scene');
+  const card=node('detail').children.find(c=>c.className==='reading');
+  assert.equal(card.children[1].textContent,'SigLIP2');
+  assert.match(card.children[2].textContent,/uncertain.*similarity 0.321.*uncalibrated/);
+  assert.doesNotMatch(card.children[2].textContent,/%/);
+  context.renderVlm({enabled:false,paused:false,models:[],local_materials:{state:'running',inference_ms:25}});
+  assert.match(node('local-material-state').textContent,/running.*25 ms per crop/);
+});
+
 test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{
   const {context,node}=setup();let gets=0,timers=0;
   context.setTimeout=()=>{timers++;return 1;};

@@ -14,7 +14,12 @@ async function search(before=null) {
     const data=await response.json(); $('rows').replaceChildren();
     for (const r of data.records) {
       const tr=document.createElement('tr'); cell(tr,new Date(r.observed_at).toLocaleString());cell(tr,r.source_id+' · '+(r.location??'Unassigned'));
-      cell(tr,score(r.initial_label,r.initial_confidence));cell(tr,score(r.enhanced_label,r.enhanced_confidence));cell(tr,r.materials?.map(m=>score(m.label,m.confidence)).join(' · ')??'Not read');cell(tr,r.analysis_status);
+      cell(tr,score(r.initial_label,r.initial_confidence));cell(tr,score(r.enhanced_label,r.enhanced_confidence));
+      const local=r.local_material;
+      const materialTexts=[];
+      if(local)materialTexts.push(`Local: ${local.status==='identified'?local.label:'uncertain'} · similarity ${local.similarity.toFixed(3)} (uncalibrated)`);
+      if(r.materials?.length)materialTexts.push('VLM: '+r.materials.map(m=>score(m.label,m.confidence)).join(' · '));
+      cell(tr,materialTexts.join(' / ')||'Not read');cell(tr,r.analysis_status);
       const link=document.createElement('a'); link.href='/#event/'+r.observation_id;link.textContent='Open observation';cell(tr,'').append(link);$('rows').append(tr);
     }
     next=data.next_cursor; $('next').disabled=!next; $('query-status').textContent=`${data.records.length} records · Queried ${new Date(data.queried_at).toLocaleString()}`;

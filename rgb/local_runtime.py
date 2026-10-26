@@ -1,4 +1,4 @@
-"""Independent detector/archive loops and a serialized, latest-frame Bedrock worker."""
+"""Independent camera, detector, local-material, archive, and Bedrock workers."""
 import hashlib
 import io
 import json
@@ -32,7 +32,9 @@ def resize_jpeg(image,max_size):
 
 class LocalRuntime:
     def __init__(self,store,camera,profile='default',region='us-west-2',detector_fps=5,archive_interval=None,
-                 min_interval=0,read_timeout=15,connect_timeout=5,max_tokens=1600,client=None):
+                 min_interval=0,read_timeout=15,connect_timeout=5,max_tokens=1600,client=None,
+                 detector_dir=None,detector_backend='onnxruntime',detector_device='CPU',detector_threads=4,
+                 material_dir=None,material_device='CPU',local_materials=True):
         self.store=store
         self.camera=camera
         self.profile=profile
@@ -63,6 +65,20 @@ class LocalRuntime:
         self.last_auto_capture=None
         self.capture_was_paused=False
         self.model_manifest=None
+        self.detector_dir=Path(detector_dir).expanduser() if detector_dir else None
+        self.detector_backend=detector_backend
+        self.detector_device=detector_device
+        self.detector_threads=detector_threads
+        self.material_dir=Path(material_dir).expanduser() if material_dir else Path.home()/'.cache/bolt-rgb/models/siglip2-base-224'
+        self.material_device=material_device
+        self.local_materials=local_materials
+        self.material_condition=threading.Condition()
+        self.material_pending=None
+        self.material_cache={}
+        self.material_inputs=OrderedDict()
+        self.material_lock=threading.RLock()
+        self.material_status={'state':'starting' if local_materials else 'disabled',
+                              'interval_s':1,'max_crops_per_pass':4,'score_type':'uncalibrated_image_text_similarity'}
         self.store_status={'asset_bytes':0,'free_bytes':None,'observations':0,'manual_queue':0,'write_bytes_per_s':0}
         self._storage_last=(time.monotonic(),0)
         self.pending_replacements=0
@@ -73,7 +89,9 @@ class LocalRuntime:
 
     def start(self):
         self.camera.start()
-        for name,target in [('detector',self._detector),('archive',self._archive_loop)]:
+        targets=[('detector',self._detector),('archive',self._archive_loop)]
+        if self.local_materials:targets.append(('materials',self._materials))
+        for name,target in targets:
             thread=threading.Thread(target=target,name=name,daemon=True);thread.start();self.threads.append(thread)
         if self.store.analysis_enabled:
             thread=threading.Thread(target=self._vlm,name='bedrock',daemon=True);thread.start();self.threads.append(thread)
@@ -81,17 +99,24 @@ class LocalRuntime:
     def stop(self,deadline=10):
         started=time.monotonic();self.stop_event.set()
         with self.condition:self.condition.notify_all()
+        with self.material_condition:self.material_condition.notify_all()
         self.camera.stop()
         for thread in self.threads:thread.join(max(0,deadline-(time.monotonic()-started)))
 
     def _detector(self):
         try:
             from board.yoloe import Detector
-            root=Path(__file__).resolve().parents[1]/'models/yoloe-26n-pf-320'
-            model=Detector(root/'model.onnx',root/'manifest.json')
+            root=self.detector_dir
+            if root is None:
+                root=Path.home()/'.cache/bolt-rgb/models/yoloe-26s-pf-640'
+                if not (root/'manifest.json').exists():
+                    root=Path(__file__).resolve().parents[1]/'models/yoloe-26n-pf-320'
+            model=Detector(root/'model.onnx',root/'manifest.json',backend=self.detector_backend,
+                           device=self.detector_device,threads=self.detector_threads)
             self.model_manifest=model.manifest
             tracker=Tracker(continuous=True)
-            self.camera.detector_status={'state':'running','model':self.model_manifest['model'],'sha256':model.sha256}
+            self.camera.detector_status={'state':'running','model':self.model_manifest['model'],'sha256':model.sha256,
+                                         'config':model.config}
         except Exception as exc:
             self.camera.detector_status={'state':'unavailable','error':f'{type(exc).__name__}: {str(exc)[:250]}'}
             return
@@ -108,22 +133,33 @@ class LocalRuntime:
                 if tracking_context!=context:
                     tracker=Tracker(continuous=True);tracking_context=context
                     with self.readings_lock:self.live_readings.clear()
+                    with self.material_lock:self.material_cache.clear()
                 settings=self.store.settings();model.threshold=settings['detector_threshold']
                 detections,milliseconds=model.detect(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR))
                 tracker.update(detections,frame.metadata['received_monotonic_s'])
                 for d in detections:
                     if frame.depth_registered is not None:d['depth']=depth_summary(frame.depth_registered,d['box'],frame.metadata.get('registered_depth_scale_mm',frame.metadata['depth_scale_mm']))
                     self._live_value(frame,d,settings)
+                    self._attach_material(frame,d)
+                    from common.display import value
+                    d['display_label']=value(d,d.get('live_value'),settings)['label']
+                with self.material_lock:
+                    present={d['track_id'] for d in detections}
+                    self.material_cache={key:item for key,item in self.material_cache.items() if key in present}
+                if self.local_materials:
+                    with self.material_condition:
+                        self.material_pending=(frame,[dict(d) for d in detections])
+                        self.material_condition.notify_all()
                 with self.readings_lock:
                     present={d['track_id'] for d in detections}
                     self.live_readings={key:item for key,item in self.live_readings.items() if key in present}
                 result={'frame_id':frame.id,'session_id':session,'observed_at':frame.metadata['received_at'],
                         'detections':detections,'detector_ms':milliseconds,
                         'detector':{'model':self.model_manifest['model'],'sha256':model.sha256,'threshold':model.threshold,
-                                    'settings_version':settings['version'],'config':{'input_size':320,'backend':'onnxruntime','depth_basis':'box_roi'}}}
+                                    'settings_version':settings['version'],'config':{**model.config,'depth_basis':'box_roi'}}}
                 with self.camera.condition:
                     self.camera.latest_detection=(frame,result)
-                    self.camera.detector_status.update(detector_ms=milliseconds,frame_id=frame.id,count=len(detections))
+                    self.camera.detector_status.update(state='running',error=None,detector_ms=milliseconds,frame_id=frame.id,count=len(detections))
             except CameraUnavailable:
                 tracker=Tracker(continuous=True);tracking_context=None
                 with self.readings_lock:self.live_readings.clear()
@@ -131,6 +167,68 @@ class LocalRuntime:
             except Exception as exc:
                 self.camera.detector_status.update(state='unavailable',error=f'{type(exc).__name__}: {str(exc)[:250]}')
                 self.stop_event.wait(1)
+
+    def _attach_material(self,frame,detection):
+        with self.material_lock:cached=self.material_cache.get(detection['track_id'])
+        if not cached:return
+        age=time.monotonic()-cached['received_monotonic_s']
+        overlap=iou(detection['box'],cached['source_box'])
+        if (cached['session_id']!=frame.metadata['session_id']
+                or cached['calibration_sha256']!=frame.metadata['calibration_sha256']
+                or not 0<=age<=5 or overlap<.7):return
+        detection['local_material']={**cached['reading'],'match_age_s':round(age,3),'match_iou':overlap}
+
+    def _material_pass(self,classifier,frame,detections):
+        if time.monotonic()-frame.metadata['received_monotonic_s']>self.camera.freshness_s:return
+        with self.material_lock:
+            ordered=sorted(detections,key=lambda d:self.material_cache.get(d['track_id'],{}).get('received_monotonic_s',0))
+            selected=[d for d in ordered if not self.material_cache.get(d['track_id'])
+                      or time.monotonic()-self.material_cache[d['track_id']]['received_monotonic_s']>=2][:4]
+        count=0
+        for detection in selected:
+            if self.stop_event.is_set():break
+            if time.monotonic()-frame.metadata['received_monotonic_s']>self.camera.freshness_s:break
+            x1,y1,x2,y2=bounds(detection['box'],frame.color_rgb.shape[1],frame.color_rgb.shape[0])
+            if x2-x1<16 or y2-y1<16:continue
+            crop=frame.color_rgb[y1:y2,x1:x2]
+            reading=classifier.classify(crop)
+            # Lossless evidence remains in bounded memory until an observation is saved.
+            evidence=png(cv2.cvtColor(crop,cv2.COLOR_RGB2BGR))
+            digest=hashlib.sha256(evidence).hexdigest()
+            reading.update(source_frame_id=frame.id,source_session_id=frame.metadata['session_id'],
+                           calibration_sha256=frame.metadata['calibration_sha256'],
+                           source_box=detection['box'],crop_bounds_xyxy=[x1,y1,x2,y2],
+                           crop_sha256=digest,observed_at=frame.metadata['received_at'])
+            with self.material_lock:
+                self.material_cache[detection['track_id']]={'reading':reading,'source_box':detection['box'],
+                    'session_id':frame.metadata['session_id'],'calibration_sha256':frame.metadata['calibration_sha256'],
+                    'received_monotonic_s':frame.metadata['received_monotonic_s']}
+                self.material_inputs[digest]=evidence
+                self.material_inputs.move_to_end(digest)
+                while len(self.material_inputs)>128 or sum(map(len,self.material_inputs.values()))>16*1024*1024:
+                    self.material_inputs.popitem(last=False)
+            count+=1
+            self.material_status.update(state='running',inference_ms=reading['inference_ms'],
+                                        last_frame_id=frame.id,last_result=reading['status'],crops_in_pass=count)
+            self.material_status.pop('error',None)
+
+    def _materials(self):
+        try:
+            from rgb.materials import MaterialClassifier
+            classifier=MaterialClassifier(self.material_dir,self.material_device)
+            self.material_status.update(state='running',config=classifier.config)
+        except Exception as exc:
+            self.material_status.update(state='unavailable',error=f'{type(exc).__name__}: {str(exc)[:250]}')
+            return
+        while not self.stop_event.is_set():
+            with self.material_condition:
+                if self.material_pending is None:self.material_condition.wait(.2)
+                pending=self.material_pending;self.material_pending=None
+            if pending:
+                try:self._material_pass(classifier,*pending)
+                except Exception as exc:
+                    self.material_status.update(state='unavailable',error=f'{type(exc).__name__}: {str(exc)[:250]}')
+            self.stop_event.wait(1)
 
     def _live_value(self,frame,detection,settings):
         from common.display import value
@@ -153,7 +251,18 @@ class LocalRuntime:
                 with self.camera.condition:latest=self.camera.latest_detection
                 result=latest[1] if latest and latest[0].id==frame.id else {'detections':[],'detector':{
                     'model':'pending','sha256':None,'config':{'state':'not_available_for_frame'}}}
-            sensors={}
+            detections=[];sensors={}
+            for index,original in enumerate(result['detections']):
+                detection=dict(original)
+                material=detection.get('local_material')
+                if material:
+                    with self.material_lock:evidence=self.material_inputs.get(material['crop_sha256'])
+                    if evidence is not None:
+                        detection['local_material']={**material,'crop_asset':self.store.asset(evidence,'.png')}
+                        sensors[f'material_crop_{index}']=detection['local_material']['crop_asset']
+                    else:
+                        detection['local_material']={**material,'status':'evidence_unavailable','label':None}
+                detections.append(detection)
             for channel,data in frame.previews.items():sensors[channel+'_preview']=self.store.asset(data,'.jpg')
             for name in ['depth_native','ir_native','depth_registered']:
                 array=getattr(frame,name)
@@ -162,7 +271,7 @@ class LocalRuntime:
             metadata=self.store.asset(encode(frame.metadata).encode(),'.json')
             event={'event_id':str(uuid4()),'frame_id':frame.id,'session_id':frame.metadata['session_id'],'source_id':'femto-bolt',
                    'observed_at':frame.metadata['received_at'],'received_at':now(),'location':None,
-                   'detector':result['detector'],'detections':result['detections'],
+                   'detector':result['detector'],'detections':detections,
                    'frame_metadata':frame.metadata,'sensor_assets':sensors,'calibration_asset':calibration,'metadata_asset':metadata}
             event['runtime_config']={**self.configuration,'archive_interval_s':self.store.settings()['capture_interval_s']}
             location=self.store.location_at(event['source_id'],event['observed_at'])
@@ -242,6 +351,7 @@ class LocalRuntime:
                 'last_error':self.last_error,'latencies':latencies,'storage':dict(self.store_status),
                 'configuration':{**self.configuration,'archive_interval_s':settings['capture_interval_s']},'live_pending_replacements':self.pending_replacements,
                 'cloud_concurrency_limit':1,'live_pending_capacity':1,
+                'local_materials':dict(self.material_status),
                 'model_outcomes':{model:dict(counts) for model,counts in self.model_outcomes.items()}}
 
     def _client(self):

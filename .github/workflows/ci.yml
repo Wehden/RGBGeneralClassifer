@@ -35,8 +35,15 @@ jobs:
         run: |
           node --check rgb/static/app.js
           node --check rgb/static/records.js
+          node --check rgb/static/live-video.js
       - name: Test browser behavior
         run: node --test tests/js/*.test.cjs
+      - name: Install browser test dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Exercise live video recovery in Chromium
+        run: npm run test:browser
       - name: Verify pinned model
         run: |
           echo '2e04c53bfeac0ac2a30c057c7e2a777594ce39baaac35a92f74fb1e8c4fc4e0b  models/efficientdet-lite0.tflite' | sha256sum -c -

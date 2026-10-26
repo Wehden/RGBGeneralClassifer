@@ -225,3 +225,6 @@ runtime.env
 *.sqlite3-journal
 *.rdb
 *.aof
+
+# Browser test dependencies
+node_modules/

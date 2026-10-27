@@ -137,8 +137,8 @@ Records preserve upstream camera names alongside local material readings.
 Pending VLM readings use a provider-neutral label instead of a hardcoded model.
 An empty local archive explains capture pause and keeps archive errors visible.
 
-The reconciliation uses upstream main `513bd7b` and also incorporates the
-VLM backlog test-contract correction proposed in upstream PR #10.
+The reconciliation uses upstream main `e8a14e5`, including the merged
+Redis deployment sizing and VLM backlog test-contract fixes.
 Regression tests dispatch material-bearing observations through both provider
 adapters without network calls, verify independent readings and exact crop
 evidence, and round-trip combined provider/material fields through Arrow.

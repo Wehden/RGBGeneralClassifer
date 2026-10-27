@@ -124,7 +124,7 @@ def main():
             self.profile.downloadRequested.connect(self.download_requested)
             self.view = QWebEngineView(self)
             self.page = LocalPage(self.profile, self.view)
-            self.page.setBackgroundColor(QColor('#141516'))
+            self.page.setBackgroundColor(QColor('#101614'))
             self.view.setPage(self.page)
             self.page.settings().setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
             self.page.fullScreenRequested.connect(self.fullscreen_requested)
@@ -329,12 +329,12 @@ def main():
     application = QApplication([sys.argv[0]])
     application.setApplicationName('RGB Console')
     application.setStyle('Fusion')
-    application.setStyleSheet('QWidget {background:#141516;color:#e6e7e8} '
-                             'QMenuBar {background:#101112;color:#e6e7e8;padding:3px} '
-                             'QMenuBar::item:selected {background:#1748b0} '
-                             'QMenu, QMessageBox {background:#1e2022;color:#e6e7e8} '
-                             'QMenu::item:selected {background:#1748b0} '
-                             'QStatusBar {font-size:11px;border-top:1px solid #45494d}')
+    application.setStyleSheet('QWidget {background:#101614;color:#eef3e9} '
+                             'QMenuBar {background:#0b100d;color:#eef3e9;padding:3px} '
+                             'QMenuBar::item:selected {background:#243028} '
+                             'QMenu, QMessageBox {background:#18211d;color:#eef3e9} '
+                             'QMenu::item:selected {background:#243028} '
+                             'QStatusBar {font-size:11px;border-top:1px solid #2d3c33}')
     application.setOrganizationName('RGBGeneralClassifier')
     application.setQuitOnLastWindowClosed(False)
     window = Console()

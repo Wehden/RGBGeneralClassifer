@@ -98,6 +98,24 @@ def test_material_worker_caps_work_and_skips_tiny_or_stale_crops(local):
     classifier.classify.assert_not_called()
 
 
+@pytest.mark.parametrize('tiny_box',[[0,0,.2,1],[0,0,1,.2],[0,0,.2,.2]])
+def test_undersized_crops_cannot_starve_eligible_tracks_across_passes(local,tiny_box):
+    store,camera,frame,detected,runtime,app=local
+    base=detected['detections'][0]
+    tiny=[{**base,'track_id':str(uuid4()),'box':tiny_box} for _ in range(4)]
+    eligible=[{**base,'track_id':str(uuid4())} for _ in range(6)]
+    classifier=Mock();classifier.classify.side_effect=lambda crop:result()
+    for expected in [4,2,0]:
+        classifier.reset_mock()
+        runtime._material_pass(classifier,frame,tiny+eligible)
+        assert classifier.classify.call_count==expected
+    assert set(runtime.material_cache)=={d['track_id'] for d in eligible}
+    for detection in eligible:
+        runtime._attach_material(frame,detection)
+        assert detection['local_material']['source_frame_id']==frame.id
+    assert store.storage_status()['observations']==0 and store.storage_status()['asset_bytes']==0
+
+
 @pytest.mark.parametrize('change',['age','session','calibration','box'])
 def test_stale_or_mismatched_material_results_are_not_attached(local,change):
     store,camera,frame,detected,runtime,app=local

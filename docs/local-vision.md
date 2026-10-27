@@ -95,6 +95,7 @@ The worker holds one latest pending frame, processes at most four crops,
 then waits one second. It reuses a reading only for the same continuous track,
 camera session and calibration, at most five seconds old, with box IoU ≥0.7.
 Crops smaller than 16 pixels on either side and stale input frames are skipped.
+Undersized crops do not consume the four-crop budget or block eligible tracks.
 Material work continues during VLM/capture pause without creating observations.
 The crop cache is bounded to 128 assets / 16 MiB.
 
@@ -168,7 +169,7 @@ compilation, JavaScript syntax, and dependency checks. Private receipts,
 model outputs and screenshots are under
 `~/.local/state/bolt-rgb/local-vision-benchmark/`.
 
-The October 27 reconciliation passed **236 Python tests** and **30 browser unit
+The October 27 reconciliation passed **239 Python tests** and **30 browser unit
 tests**, the Chromium live-stream recovery checks, Python compilation,
 JavaScript syntax checks, pinned model checksums, dependency checks and the
 Docker build. The Python run included inference with the installed SigLIP2
@@ -192,6 +193,7 @@ settings were not modified.
 | Small/medium artifacts and class mappings are verified before inference | Checksum validation and recorded manifests |
 | Detector provenance reflects actual input size/runtime | Camera status and archived detector config |
 | Local material work does not write observations | `test_material_worker_uses_crops_without_creating_records` |
+| Undersized crops do not starve eligible tracks across passes | Parameterized undersized-crop regression |
 | Ambiguous scores do not become material labels or probabilities | Rank/display/filter tests |
 | Results cannot cross session/calibration/track/age/box boundaries | Parameterized stale-result tests |
 | Saved readings retain exact lossless crop evidence | Asset, evidence ZIP and typed export round-trip tests |

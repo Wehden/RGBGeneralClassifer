@@ -186,11 +186,12 @@ class LocalRuntime:
         if time.monotonic()-frame.metadata['received_monotonic_s']>self.camera.freshness_s:return
         with self.material_lock:
             ordered=sorted(detections,key=lambda d:self.material_cache.get(d['track_id'],{}).get('received_monotonic_s',0))
-            selected=[d for d in ordered if not self.material_cache.get(d['track_id'])
-                      or time.monotonic()-self.material_cache[d['track_id']]['received_monotonic_s']>=2][:4]
+            candidates=[d for d in ordered if not self.material_cache.get(d['track_id'])
+                        or time.monotonic()-self.material_cache[d['track_id']]['received_monotonic_s']>=2]
         count=0
-        for detection in selected:
-            if self.stop_event.is_set():break
+        for detection in candidates:
+            # Skipped crops must not consume slots or starve eligible tracks.
+            if count>=4 or self.stop_event.is_set():break
             if time.monotonic()-frame.metadata['received_monotonic_s']>self.camera.freshness_s:break
             x1,y1,x2,y2=bounds(detection['box'],frame.color_rgb.shape[1],frame.color_rgb.shape[0])
             if x2-x1<16 or y2-y1<16:continue

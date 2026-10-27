@@ -80,7 +80,7 @@ def main():
             os.environ.pop(key)
     try:
         from PySide6.QtCore import QCoreApplication, QEvent, QObject, QTimer, QUrl, Signal
-        from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+        from PySide6.QtGui import QAction, QColor, QDesktopServices, QKeySequence
         from PySide6.QtWidgets import (
             QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
             QStackedWidget, QVBoxLayout, QWidget,
@@ -124,6 +124,7 @@ def main():
             self.profile.downloadRequested.connect(self.download_requested)
             self.view = QWebEngineView(self)
             self.page = LocalPage(self.profile, self.view)
+            self.page.setBackgroundColor(QColor('#141516'))
             self.view.setPage(self.page)
             self.page.settings().setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
             self.page.fullScreenRequested.connect(self.fullscreen_requested)
@@ -328,10 +329,12 @@ def main():
     application = QApplication([sys.argv[0]])
     application.setApplicationName('RGB Console')
     application.setStyle('Fusion')
-    application.setStyleSheet('QMainWindow, QStatusBar {background:#ece9e0;color:#191919} '
-                             'QMenuBar {background:#191919;color:#f7f5ee;padding:3px} '
+    application.setStyleSheet('QWidget {background:#141516;color:#e6e7e8} '
+                             'QMenuBar {background:#101112;color:#e6e7e8;padding:3px} '
                              'QMenuBar::item:selected {background:#1748b0} '
-                             'QStatusBar {font-size:11px;border-top:1px solid #c3c0b7}')
+                             'QMenu, QMessageBox {background:#1e2022;color:#e6e7e8} '
+                             'QMenu::item:selected {background:#1748b0} '
+                             'QStatusBar {font-size:11px;border-top:1px solid #45494d}')
     application.setOrganizationName('RGBGeneralClassifier')
     application.setQuitOnLastWindowClosed(False)
     window = Console()

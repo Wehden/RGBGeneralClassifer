@@ -1,4 +1,4 @@
-"""Run the local Femto Bolt service: python -m rgb.local."""
+"""Run the local RGB camera service: python -m rgb.local."""
 import argparse
 import logging
 import math
@@ -10,12 +10,13 @@ from pathlib import Path
 from waitress import create_server
 from rgb.camera import Camera, CameraBusy, CameraLock, CameraUnavailable
 from rgb.local_runtime import LocalRuntime
-from rgb.local_store import FALLBACK_MODEL, PRIMARY_MODEL, LocalStore
+from rgb.local_store import LocalStore
 from rgb.web import create_app
+from rgb.vlm_providers import MODELS, model_selection
 
 
 def parser():
-    p=argparse.ArgumentParser(description='Local Femto Bolt color/depth/IR camera and Bedrock review service')
+    p=argparse.ArgumentParser(description='Local RGB camera and visual review service')
     p.add_argument('--host',default=os.environ.get('RGB_HOST','127.0.0.1'))
     p.add_argument('--port',type=int,default=int(os.environ.get('RGB_PORT','8080')))
     p.add_argument('--state-dir',default=os.environ.get('RGB_STATE_DIR',str(Path.home()/'.local/share/bolt-rgb')))
@@ -24,7 +25,8 @@ def parser():
     p.add_argument('--camera-backend',choices=['orbbec','v4l2'],default=os.environ.get('RGB_CAMERA_BACKEND','orbbec'))
     p.add_argument('--camera-serial',default=os.environ.get('RGB_CAMERA_SERIAL'))
     p.add_argument('--camera-device',default=os.environ.get('RGB_CAMERA_DEVICE','/dev/video0'))
-    p.add_argument('--model',choices=[PRIMARY_MODEL,FALLBACK_MODEL],default=os.environ.get('RGB_MODEL'))
+    p.add_argument('--provider',choices=list(MODELS),default=os.environ.get('RGB_VLM_PROVIDER'))
+    p.add_argument('--model',default=os.environ.get('RGB_MODEL'))
     paused=os.environ.get('RGB_VLM_PAUSED')
     if paused not in {None,'true','false'}:raise ValueError('RGB_VLM_PAUSED must be true or false')
     p.add_argument('--paused',action=argparse.BooleanOptionalAction,default=None if paused is None else paused=='true')
@@ -54,6 +56,15 @@ def parser():
     return p
 
 
+def provider_settings(args,settings):
+    provider=args.provider or settings.get('selected_provider','bedrock')
+    if provider not in MODELS:raise ValueError('Unsupported VLM provider')
+    model=args.model or (next(iter(MODELS[provider])) if args.provider and provider!=settings.get('selected_provider','bedrock')
+                        else settings['selected_model'])
+    model_selection(provider,model)
+    return {'selected_provider':provider,'selected_model':model,'model_selection_reason':'cli_override'} if args.provider or args.model else {}
+
+
 def main():
     args=parser().parse_args()
     timings=[args.detector_fps,args.read_timeout,args.connect_timeout,args.freshness,args.vlm_min_interval]
@@ -77,14 +88,15 @@ def main():
     except (CameraBusy,CameraUnavailable) as exc:raise SystemExit(str(exc))
     store=LocalStore(args.state_dir,analysis_enabled=not args.no_vlm)
     updates={}
-    if args.model:updates.update(selected_model=args.model,model_selection_reason='cli_override')
+    try:updates.update(provider_settings(args,store.settings()))
+    except ValueError as exc:raise SystemExit(str(exc))
     if args.paused is not None:updates['vlm_paused']=args.paused
     if args.archive_interval is not None:updates['capture_interval_s']=args.archive_interval
     for key in ['detector_threshold','vlm_threshold','display_mode']:
         if getattr(args,key) is not None:updates[key]=getattr(args,key)
     if updates:store.update_settings(updates)
     settings=store.settings()
-    if settings['selected_model'] not in {PRIMARY_MODEL,FALLBACK_MODEL} or settings['display_mode'] not in {'objects','materials'} or type(settings['vlm_paused']) is not bool:
+    if settings['display_mode'] not in {'objects','materials'} or type(settings['vlm_paused']) is not bool:
         raise SystemExit('Invalid saved model, display mode or pause setting')
     if any(type(settings[key]) not in {int,float} or not math.isfinite(settings[key]) or not .05<=settings[key]<=.99 for key in ['detector_threshold','vlm_threshold']):
         raise SystemExit('Invalid saved confidence thresholds')
@@ -102,7 +114,7 @@ def main():
                                  max_channel_skew_ms=camera.skew_ms,freshness_s=camera.freshness_s,
                                  max_cached_frames=camera.max_frames,max_cache_bytes=camera.max_bytes,
                                  shutdown_deadline_s=10)
-    app=create_app(store,sources={'femto-bolt':{'label':'Femto Bolt','local':True}},local_runtime=runtime)
+    app=create_app(store,sources={'femto-bolt':{'local':True}},local_runtime=runtime)
     # Bind and initialize the archive first; camera and ML failures remain observable through the API.
     server=create_server(app,host=args.host,port=args.port,threads=16,channel_timeout=30)
     stopped=threading.Event()
@@ -124,7 +136,8 @@ def main():
                 stop()
                 return
     threading.Thread(target=ownership_monitor,name='ownership-monitor',daemon=True).start()
-    logging.info('Local RGB runner listening on %s:%s, AWS profile %s, region %s',args.host,args.port,args.aws_profile,args.aws_region)
+    logging.info('Local RGB runner listening on %s:%s, VLM provider %s, model %s',args.host,args.port,
+                 settings['selected_provider'],settings['selected_model'])
     try:server.run()
     finally:stop()
     if camera.fatal_error:raise SystemExit(1)

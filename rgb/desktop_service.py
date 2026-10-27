@@ -51,13 +51,13 @@ def probe(url, timeout=2):
         except (URLError, TimeoutError, OSError) as exc:
             raise ServiceUnavailable('Local service is not responding') from exc
         except (ValueError, UnicodeError) as exc:
-            raise ServiceMismatch('The listener is not a local Bolt RGB service') from exc
+            raise ServiceMismatch('The listener is not a local RGB service') from exc
     health, vlm = result['health'], result['vlm']
     if (not isinstance(health, dict) or health.get('status') != 'ok'
             or not isinstance(health.get('camera'), dict)
             or not isinstance(vlm, dict) or not isinstance(vlm.get('configuration'), dict)
             or not isinstance(vlm.get('enabled'), bool)):
-        raise ServiceMismatch('The listener is not a local Bolt RGB service')
+        raise ServiceMismatch('The listener is not a local RGB service')
     return result
 
 

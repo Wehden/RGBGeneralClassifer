@@ -18,7 +18,7 @@ from common.geometry import bounds
 from rgb.materials import prepare, rank, MaterialClassifier
 from rgb.camera import make_frame
 from rgb.store import now
-from test_local import local
+from test_local import local, openrouter_local
 
 
 def manifest():
@@ -114,6 +114,7 @@ def test_stale_or_mismatched_material_results_are_not_attached(local,change):
 
 def test_local_material_evidence_survives_archive_queries_and_typed_exports(local):
     store,camera,frame,detected,runtime,app=local
+    frame.metadata['device']={'name':'Femto Bolt'}
     detection,_=material_detection(local)
     event=runtime.archive(frame,{**detected,'detections':[detection]})
     reading=event['detections'][0]['local_material']
@@ -125,13 +126,15 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     assert np.array_equal(crop,cv2.cvtColor(frame.color_rgb[y1:y2,x1:x2],cv2.COLOR_RGB2BGR))
     records=app.test_client().get('/api/review/records?material=plastic').json['records']
     assert records[0]['local_material']['source_frame_id']==frame.id
+    assert records[0]['camera_name']=='Femto Bolt'
     page=app.test_client().get('/api/review/records?format=parquet')
-    assert json.loads(pq.read_table(pa.BufferReader(page.data)).to_pylist()[0]['local_material_json'])==reading
+    row=pq.read_table(pa.BufferReader(page.data)).to_pylist()[0]
+    assert json.loads(row['local_material_json'])==reading and row['camera_name']=='Femto Bolt'
     store.update_settings({'display_mode':'materials'})
     assert store.get(event['event_id'])['detections'][0]['display_label']=='plastic'
     response=app.test_client().get('/api/review/export/parquet')
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-        assert json.loads(archive.read('manifest.json'))['schema_version']==8
+        assert json.loads(archive.read('manifest.json'))['schema_version']==9
         rows=pq.read_table(pa.BufferReader(archive.read('material_readings.parquet'))).to_pylist()
         assert rows[0]['provider']=='siglip2' and rows[0]['confidence'] is None
         assert rows[0]['similarity']==.38 and rows[0]['accepted'] is True
@@ -142,6 +145,43 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     with zipfile.ZipFile(io.BytesIO(evidence.data)) as archive:
         assert 'assets/'+reading['crop_asset']['file'] in archive.namelist()
     evidence.close()
+
+
+@pytest.mark.parametrize('provider',['bedrock','openrouter'])
+def test_local_material_evidence_and_provider_audit_survive_shared_review(openrouter_local,provider):
+    (store,camera,frame,detected,runtime,app),session=openrouter_local
+    model='us.amazon.nova-2-lite-v1:0' if provider=='bedrock' else 'amazon/nova-2-lite-v1'
+    store.update_settings({'selected_provider':provider,'selected_model':model})
+    runtime.update_capture_settings({'capture_paused':True})
+    detection,_=material_detection((store,camera,frame,detected,runtime,app))
+    event=runtime.archive(frame,{**detected,'detections':[detection]})
+    original=event['detections'][0]['local_material']
+    assert store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    calls=runtime.client.calls if provider=='bedrock' else session.calls
+    other=session.calls if provider=='bedrock' else runtime.client.calls
+    assert len(calls)==1 and not other
+    projected=store.get(event['event_id'])['detections'][0]
+    assert projected['local_material']==original
+    assert projected['enhancement']['endpoint']==provider and projected['enhancement']['model']==model
+    assert store.settings()['capture_paused'] is True and store.storage_status()['observations']==1
+    store.update_settings({'display_mode':'materials'})
+    assert store.get(event['event_id'])['detections'][0]['label_provider']=='siglip2'
+    with app.test_client().get('/api/review/export/arrow') as response:
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            assert json.loads(archive.read('manifest.json'))['schema_version']==9
+            attempts=pa.ipc.open_file(pa.BufferReader(archive.read('model_attempts.arrow'))).read_all().to_pylist()
+            assert attempts[-1]['endpoint']==provider and attempts[-1]['outcome']=='success'
+            assert attempts[-1]['ordered_image_sha256']==attempts[0]['ordered_image_sha256']
+            if provider=='openrouter':
+                assert attempts[-1]['resolved_model']==model and attempts[-1]['cost']==.0003
+            materials=pa.ipc.open_file(pa.BufferReader(archive.read('material_readings.arrow'))).read_all().to_pylist()
+            assert {r['provider'] for r in materials}=={'siglip2','vlm'}
+            local_row=next(r for r in materials if r['provider']=='siglip2')
+            assert json.loads(local_row['value_json'])==original and local_row['confidence'] is None
+    html=app.test_client().get('/').data
+    assert b'id="vlm-provider"' in html and b'id="local-material-state"' in html
+    assert b'id="detection-indicator"' in html and b'id="bedrock-model"' not in html
 
 
 def test_missing_crop_evidence_cannot_be_archived_as_identified(local):
@@ -155,7 +195,7 @@ def test_missing_crop_evidence_cannot_be_archived_as_identified(local):
     assert value(event['detections'][0],None,{'display_mode':'materials'})['label']=='Material uncertain'
 
 
-def test_manual_capture_defaults_to_fresh_annotated_frame_and_honors_explicit_frame(local):
+def test_manual_capture_defaults_to_material_annotated_frame_and_requires_pinned_detection(local):
     store,camera,frame,detected,runtime,app=local
     detection,_=material_detection(local)
     camera.latest_detection=(frame,{**detected,'detections':[detection]})
@@ -167,8 +207,13 @@ def test_manual_capture_defaults_to_fresh_annotated_frame_and_honors_explicit_fr
     assert response.status_code==201 and response.json['frame_id']==frame.id
     assert store.raw(response.json['event_id'])['detections'][0]['local_material']['crop_asset']
     pinned=app.test_client().post('/api/camera/observations',json={'frame_id':newer.id})
+    assert pinned.status_code==503 and store.event_for_frame(newer.id) is None
+    camera.latest_detection=(newer,{**detected,'detections':[detection]})
+    pinned=app.test_client().post('/api/camera/observations',json={'frame_id':newer.id})
+    assert pinned.status_code==201
     assert pinned.json['frame_id']==newer.id
-    assert store.raw(pinned.json['event_id'])['detections']==[]
+    saved=store.raw(pinned.json['event_id'])['detections'][0]['local_material']
+    assert saved['source_frame_id']==frame.id and saved['crop_asset']
 
 
 def test_uncertain_material_does_not_become_a_label_or_probability(local):

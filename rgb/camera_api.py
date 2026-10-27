@@ -163,13 +163,10 @@ class CameraAPI:
         if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc!=request.host:return 'Origin mismatch',403
         data=request.get_json(silent=True)
         if not isinstance(data,dict) or set(data)-{'frame_id'}:return jsonify(error='Expected optional frame_id'),400
-        frame,error=self._frame(data)
-        if error:return error
-        if 'frame_id' not in data:
-            with self.camera.condition:latest=self.camera.latest_detection
-            if (latest and latest[0].metadata['session_id']==frame.metadata['session_id']
-                    and time.monotonic()-latest[0].metadata['received_monotonic_s']<=self.camera.freshness_s):
-                frame=latest[0]
+        frame=None
+        if data.get('frame_id') is not None:
+            frame,error=self._frame(data)
+            if error:return error
         try:event=self.runtime.archive(frame)
         except RuntimeError as exc:return jsonify(error=str(exc)),429
         return jsonify(observation_id=event['event_id'],event_id=event['event_id'],frame_id=event['frame_id']),201
@@ -189,7 +186,7 @@ class CameraAPI:
         try:payload=self.pointcloud_builder.build(frame,stride,max_range)
         finally:self.pointcloud_slots.release()
         response=Response(payload,mimetype='application/octet-stream')
-        response.headers['Content-Disposition']='attachment; filename="bolt-pointcloud.bin"'
+        response.headers['Content-Disposition']='attachment; filename="rgb-pointcloud.bin"'
         self._headers(response,frame,'pointcloud','depth_registered')
         response.headers['X-RGB-Depth-Units']='metres'
         response.headers['X-RGB-Coordinate-Frame']='color_camera'

@@ -21,6 +21,7 @@ from rgb.local_runtime import LocalRuntime
 from rgb.local_store import ArchiveConflict, FALLBACK_MODEL, PRIMARY_MODEL, LocalStore, QueueFull, encode
 from rgb.store import StaleEvaluation, detection_id, now
 from rgb.web import create_app
+from rgb.vlm_providers import OpenRouterProvider
 
 
 def reading(index=0):
@@ -74,6 +75,23 @@ def test_frame_bundle_raw_planes_calibration_and_headers(local):
     assert client.get('/api/camera/thermal/snapshot.jpg').status_code==404
 
 
+def test_local_source_reports_actual_camera_name_without_renaming_archive_identity(local,monkeypatch):
+    store,camera,frame,result,runtime,app=local
+    camera.backend='v4l2'
+    monkeypatch.setattr('rgb.camera.v4l2_name',lambda device:'C922 Pro Stream Webcam')
+    client=app.test_client()
+    assert client.get('/api/sources').json[0]['label']=='C922 Pro Stream Webcam'
+    assert client.get('/api/sources').json[0]['id']=='femto-bolt'
+    status=client.get('/api/camera/status').json
+    assert status['name']==status['device']['name']=='C922 Pro Stream Webcam'
+    assert status['backend']=='v4l2'
+    frame.metadata['device']={'name':'C922 Pro Stream Webcam'}
+    runtime.archive(frame,result)
+    camera.backend='orbbec';camera.info={'name':'Orbbec Femto Bolt','serial':'test'}
+    assert client.get('/api/sources').json[0]['label']=='Orbbec Femto Bolt'
+    assert client.get('/api/review/records').json['records'][0]['camera_name']=='C922 Pro Stream Webcam'
+
+
 def test_stale_camera_leaves_status_health_archive_available(local):
     store,camera,frame,result,runtime,app=local
     event=runtime.archive(frame,result)
@@ -119,6 +137,69 @@ def test_frame_eviction_and_pinned_detections_pending(local):
     assert response['frame_id']==frame.id and response['camera_frame_id']==new.id
     camera.max_frames=1;camera.publish(new)
     with pytest.raises(FrameExpired):camera.get(frame.id)
+
+
+def test_manual_capture_uses_completed_frame_and_remains_analyzable(local):
+    store,camera,frame,result,runtime,app=local
+    newer=make_frame(np.zeros((30,40,3),np.uint8),None,None,None,
+                     {**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()})
+    camera.publish(newer)
+    runtime.update_capture_settings({'capture_paused':True})
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==201
+    assert response.json['frame_id']==frame.id
+    event=store.raw(response.json['event_id'])
+    assert event['detections']==result['detections']
+    assert event['detector']==result['detector']
+    assert event['sensor_assets']['color_preview']['sha256']==hashlib.sha256(frame.previews['color']).hexdigest()
+    assert store.event_for_frame(newer.id) is None
+    runtime.client=FakeBedrock()
+    store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    assert len(runtime.client.calls)==1
+    assert store.get(event['event_id'])['detections'][0]['enhancement']['label']=='plastic bottle'
+
+
+@pytest.mark.parametrize('unavailable',['missing','stale','session','calibration','dimensions'])
+def test_manual_capture_rejects_unusable_detection_without_archiving(local,unavailable):
+    store,camera,frame,result,runtime,app=local
+    if unavailable=='missing':camera.latest_detection=None
+    elif unavailable=='stale':frame.metadata['received_monotonic_s']=time.monotonic()-camera.freshness_s-1
+    metadata={**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()}
+    if unavailable=='session':metadata['session_id']=str(uuid4())
+    if unavailable=='calibration':metadata['calibration_sha256']='b'*64
+    shape=(20,20,3) if unavailable=='dimensions' else (30,40,3)
+    camera.publish(make_frame(np.zeros(shape,np.uint8),None,None,None,metadata))
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==503
+    assert store.storage_status()['observations']==0
+
+
+def test_pinned_capture_waits_for_matching_detection_and_preserves_identity(local):
+    store,camera,frame,result,runtime,app=local
+    newer=make_frame(np.zeros((30,40,3),np.uint8),None,None,None,
+                     {**frame.metadata,'frame_id':str(uuid4()),'received_monotonic_s':time.monotonic()})
+    camera.publish(newer)
+    client=app.test_client()
+    assert client.post('/api/camera/observations',json={'frame_id':newer.id}).status_code==503
+    with pytest.raises(CameraUnavailable):runtime.archive(newer)
+    assert store.storage_status()['observations']==0
+    camera.latest_detection=(newer,{**result,'frame_id':newer.id})
+    saved=client.post('/api/camera/observations',json={'frame_id':newer.id})
+    assert saved.status_code==201 and saved.json['frame_id']==newer.id
+    camera.latest_detection=None
+    repeated=client.post('/api/camera/observations',json={'frame_id':newer.id})
+    assert repeated.status_code==201 and repeated.json==saved.json
+    assert store.storage_status()['observations']==1
+
+
+def test_manual_capture_preserves_genuinely_empty_detection_result(local):
+    store,camera,frame,result,runtime,app=local
+    camera.latest_detection=(frame,{**result,'detections':[]})
+    response=app.test_client().post('/api/camera/observations',json={})
+    assert response.status_code==201
+    event=store.raw(response.json['event_id'])
+    assert event['detections']==[] and event['detector']==result['detector']
 
 
 def test_depth_statistics_units_invalids_and_minimum_samples():
@@ -352,6 +433,142 @@ def test_model_selection_validates_reason_and_audits_revision(local):
     assert good.status_code==200
     assert good.json['version']==1
     assert client.get('/api/vlm/status').json['selected_model']==FALLBACK_MODEL
+
+
+@pytest.fixture
+def openrouter_local(local,monkeypatch):
+    store,camera,frame,result,runtime,app=local
+    monkeypatch.setenv('OPENROUTER_API_KEY','private-test-key')
+    class Response:
+        status_code=200
+        headers={}
+        def __init__(self,payload):self.payload=payload
+        def json(self):return self.payload
+        def close(self):pass
+    class Session:
+        def __init__(self):
+            self.calls=[]
+            self.text=json.dumps({'observations':[reading()]})
+            self.finish_reason='stop'
+        def post(self,url,**kwargs):
+            self.calls.append(kwargs)
+            return Response({'id':'gen-local','provider':'Amazon Bedrock','model':kwargs['json']['model'],
+                'choices':[{'finish_reason':self.finish_reason,'message':{'content':self.text}}],
+                'usage':{'prompt_tokens':120,'completion_tokens':90,'cost':.0003,
+                         'completion_tokens_details':{'reasoning_tokens':0}}})
+    session=Session()
+    runtime.providers['openrouter']=OpenRouterProvider(session=session)
+    runtime.client=FakeBedrock()
+    response=app.test_client().post('/api/settings',json={'selected_provider':'openrouter',
+        'selected_model':'amazon/nova-2-lite-v1','model_selection_reason':'restore_primary'},
+        headers={'X-RGB-Request':'settings'})
+    assert response.status_code==200
+    return local,session
+
+
+def test_openrouter_shared_validation_audit_projection_status_and_export(openrouter_local):
+    (store,camera,frame,result,runtime,app),session=openrouter_local
+    event=runtime.archive(frame,result)
+    store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    projected=store.get(event['event_id'])['detections'][0]['enhancement']
+    assert projected['label']=='plastic bottle' and projected['endpoint']=='openrouter'
+    assert projected['model']=='amazon/nova-2-lite-v1'
+    attempts=[json.loads(fields['value']) for _,fields in store.stream('rgb:model-attempts')]
+    assert [a['outcome'] for a in attempts]==['started','success']
+    assert {a['endpoint'] for a in attempts}=={'openrouter'}
+    terminal=attempts[-1]
+    assert terminal['resolved_model']=='amazon/nova-2-lite-v1' and terminal['upstream_provider']=='Amazon Bedrock'
+    assert terminal['request_id']=='gen-local' and terminal['prompt_tokens']==120
+    assert terminal['ordered_image_sha256']==attempts[0]['ordered_image_sha256']
+    assert len(terminal['inputs'])==4
+    assert not runtime.client.calls and len(session.calls)==1
+    assert 'private-test-key' not in encode(attempts)
+    status=app.test_client().get('/api/vlm/status').json
+    assert status['selected_provider']=='openrouter'
+    assert status['latencies'][0]['provider']=='openrouter'
+    assert status['model_outcomes']['amazon/nova-2-lite-v1']['success']==1
+    assert status['providers'][1]['models'][0]['id']=='amazon/nova-2-lite-v1'
+    assert LocalStore(store.directory).settings()['selected_provider']=='openrouter'
+    with app.test_client().get('/api/review/export/parquet') as response:
+        assert response.status_code==200
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            assert json.loads(archive.read('manifest.json'))['schema_version']==9
+            rows=pq.read_table(pa.BufferReader(archive.read('model_attempts.parquet'))).to_pylist()
+            assert rows[-1]['endpoint']=='openrouter' and rows[-1]['cost']==.0003
+            assert rows[-1]['reasoning_tokens']==0
+            settings=pq.read_table(pa.BufferReader(archive.read('settings.parquet'))).to_pylist()
+            assert settings[-1]['selected_provider']=='openrouter'
+
+
+def test_queued_openrouter_job_keeps_provider_when_selection_changes(openrouter_local):
+    (store,camera,frame,result,runtime,app),session=openrouter_local
+    event=runtime.archive(frame,result)
+    store.request_analysis(event['event_id'])
+    job=store.job(event['event_id'])
+    store.update_settings({'selected_provider':'bedrock','selected_model':PRIMARY_MODEL})
+    assert runtime._batch(job)
+    assert len(session.calls)==1 and not runtime.client.calls
+    assert job['policy']['selected_provider']=='openrouter'
+    store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    assert len(runtime.client.calls)==1
+
+
+@pytest.mark.parametrize('failure',['schema','truncated','missing_key'])
+def test_failed_openrouter_never_publishes_or_switches_provider(openrouter_local,failure,monkeypatch):
+    (store,camera,frame,result,runtime,app),session=openrouter_local
+    if failure=='schema':session.text='{"observations":[]}'
+    elif failure=='truncated':session.finish_reason='length'
+    else:monkeypatch.delenv('OPENROUTER_API_KEY')
+    event=runtime.archive(frame,result);store.request_analysis(event['event_id'])
+    assert runtime._batch(store.job(event['event_id']))
+    assert store.analysis(event['event_id'])['status']=='failed'
+    assert store.get(event['event_id'])['detections'][0]['enhancement'] is None
+    assert not runtime.client.calls
+    assert store.settings()['selected_provider']=='openrouter'
+    attempts=[json.loads(fields['value']) for _,fields in store.stream('rgb:model-attempts')]
+    assert [a['outcome'] for a in attempts]==['started','failed']
+    if failure!='missing_key':assert attempts[-1]['request_id']=='gen-local'
+
+
+@pytest.mark.parametrize('provider,model',[
+    ('openrouter',PRIMARY_MODEL),('bedrock','amazon/nova-2-lite-v1'),
+    ('unknown','amazon/nova-2-lite-v1'),([],PRIMARY_MODEL),('bedrock',[]),
+])
+def test_provider_model_pair_validation_is_atomic(local,provider,model):
+    store,*_,app=local
+    response=app.test_client().post('/api/settings',json={'selected_provider':provider,'selected_model':model,
+        'model_selection_reason':'restore_primary'},headers={'X-RGB-Request':'settings'})
+    assert response.status_code==400
+    assert store.settings()['selected_provider']=='bedrock' and store.settings()['version']==0
+
+
+def test_legacy_queued_job_without_provider_still_uses_bedrock(local):
+    store,camera,frame,result,runtime,app=local
+    event,job=start_job(local,FakeBedrock())
+    del job['policy']['selected_provider']
+    assert runtime._batch(job)
+    assert len(runtime.client.calls)==1
+    assert store.get(event['event_id'])['detections'][0]['enhancement']['endpoint']=='bedrock'
+
+
+def test_provider_cli_preserves_saved_choices_and_maps_explicit_provider_defaults(local,monkeypatch):
+    from rgb.local import parser, provider_settings
+    store,*_=local
+    monkeypatch.delenv('RGB_VLM_PROVIDER',raising=False)
+    monkeypatch.delenv('RGB_MODEL',raising=False)
+    default=provider_settings(parser().parse_args(['--provider','openrouter']),store.settings())
+    assert default['selected_model']=='amazon/nova-2-lite-v1'
+    store.update_settings({**default,'selected_model':'google/gemini-2.5-flash-lite'})
+    assert provider_settings(parser().parse_args([]),store.settings())=={}
+    assert provider_settings(parser().parse_args(['--provider','bedrock']),store.settings())['selected_model']==PRIMARY_MODEL
+    monkeypatch.setenv('RGB_VLM_PROVIDER','openrouter')
+    monkeypatch.setenv('RGB_MODEL','amazon/nova-lite-v1')
+    assert provider_settings(parser().parse_args([]),store.settings())['selected_model']=='amazon/nova-lite-v1'
+    with pytest.raises(ValueError):provider_settings(parser().parse_args(['--provider','bedrock']),store.settings())
+    monkeypatch.setenv('RGB_VLM_PROVIDER','unknown')
+    with pytest.raises(ValueError):provider_settings(parser().parse_args([]),store.settings())
 
 
 def test_preparation_error_marks_manual_job_failed_instead_of_stranding_it(local):

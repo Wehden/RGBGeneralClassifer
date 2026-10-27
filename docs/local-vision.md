@@ -23,7 +23,7 @@ python3 -m venv .venv-models
   --extra-index-url https://download.pytorch.org/whl/cpu
 .venv-models/bin/python scripts/setup-local-vision.py
 .venv/bin/pip install -r requirements-desktop.txt
-bolt-rgb
+rgb-console
 ```
 
 Artifacts are placed in `~/.cache/bolt-rgb/models`. The script verifies
@@ -35,13 +35,14 @@ Downloaded/generated weights and private camera frames are outside the repo.
 For medium or the legacy detector:
 
 ```sh
-bolt-rgb -- --detector-model-dir "$HOME/.cache/bolt-rgb/models/yoloe-26m-pf-640"
-bolt-rgb -- --detector-model-dir models/yoloe-26n-pf-320 --detector-fps 5
-bolt-rgb -- --no-local-materials
+rgb-console -- --detector-model-dir "$HOME/.cache/bolt-rgb/models/yoloe-26m-pf-640"
+rgb-console -- --detector-model-dir models/yoloe-26n-pf-320 --detector-fps 5
+rgb-console -- --no-local-materials
 ```
 
 The desktop attaches to an existing service first. Model arguments apply when
 it starts a service; restart the owning console to change them.
+The existing `bolt-rgb` helper remains compatible with the renamed console.
 
 ## Benchmark and model selection
 
@@ -101,13 +102,48 @@ Saved observations retain lossless PNG evidence for each attached material
 reading, its actual source frame/session/box, crop hash, model revision,
 model/embedding hashes, preprocessing/prompts, match age, scores and policy.
 An evicted evidence crop cannot be archived as an accepted material.
-`Capture once` uses the latest fresh annotated frame unless an explicit
-`frame_id` was supplied. Raw sensor assets refer to that same observation frame.
+`Capture once` uses the latest fresh detector-completed frame from the current
+session, calibration and image dimensions. An explicit `frame_id` retains that
+identity and requires its matching detection result. Missing or stale detection
+returns a retryable 503 without saving an observation; a completed result with
+zero objects is still valid. Raw sensor assets refer to that observation frame.
 
 JSON records include `local_material`; paged Parquet/Arrow downloads include
-`local_material_json`. Complete schema-8 exports keep local readings in
+`local_material_json`. Complete schema-9 exports keep local readings in
 `material_readings` with `provider=siglip2`, null probability confidence, and
 separate similarity/margin/status columns. Evidence ZIPs include source crops.
+
+## Shared UI and VLM providers
+
+The local pipeline uses the current upstream RGB Console layout, dark forest
+palette, detection/capture/VLM activity indicators, backlog display, and
+capability-aware RGB/depth/IR/3D icons. The native X11 window embeds that same
+dashboard. Local material status appears in the Detection segment; scores and
+crop evidence remain in capture review, with uncertainty explained in Settings.
+
+Cloud review uses `rgb.vlm_providers.ReviewProvider`, `ReviewRequest` and
+`ReviewResponse` from upstream. Bedrock and OpenRouter receive the same ordered
+JPEG scene/crops and available depth/IR previews through their adapters. Image
+preparation, validation, serialized dispatch, pause behavior, durable job policy
+and evidence are shared. SigLIP2 remains a separate offline crop worker.
+The configured Bedrock Nova 2 Lite / AWS profile `default` selection is preserved;
+the merge does not select OpenRouter or trigger cloud calls.
+
+Export schema 9 combines upstream schema-8 provider auditing
+(`selected_provider`, resolved model, upstream provider, cost and reasoning
+tokens) with local material evidence and similarity fields. Existing SQLite
+archives retain database schema 2; this export change does not rewrite captures.
+Records preserve upstream camera names alongside local material readings.
+Pending VLM readings use a provider-neutral label instead of a hardcoded model.
+An empty local archive explains capture pause and keeps archive errors visible.
+
+The reconciliation uses upstream main `513bd7b` and also incorporates the
+VLM backlog test-contract correction proposed in upstream PR #10.
+Regression tests dispatch material-bearing observations through both provider
+adapters without network calls, verify independent readings and exact crop
+evidence, and round-trip combined provider/material fields through Arrow.
+
+## Recorded qualification
 
 On eight sampled object crops, 40 warm measurements gave **175.8 ms median /
 203.4 ms p95** per crop with two CPU threads. The export matched the source
@@ -132,6 +168,23 @@ compilation, JavaScript syntax, and dependency checks. Private receipts,
 model outputs and screenshots are under
 `~/.local/state/bolt-rgb/local-vision-benchmark/`.
 
+The October 27 reconciliation passed **236 Python tests** and **30 browser unit
+tests**, the Chromium live-stream recovery checks, Python compilation,
+JavaScript syntax checks, pinned model checksums, dependency checks and the
+Docker build. The Python run included inference with the installed SigLIP2
+artifacts; CI skips that optional artifact-dependent check when absent.
+
+The reconciled dashboard was exercised against the attached Femto Bolt using a
+separate private archive with both capture and VLM paused. RGB, depth, IR and
+WebGL 3D switching passed without page errors; the point cloud displayed
+13,054 points at 4.2 FPS with the local workers active. Intentional captures
+retained material crop evidence, displayed uncalibrated scores, and appeared
+in Records. The native Qt/X11 console attached to that same service, reported
+the device name, and closed without stopping the attached service. No cloud
+requests were dispatched. Receipts and private screenshots are under
+`~/.local/state/bolt-rgb/reconciliation/`; the normal operator archive and
+settings were not modified.
+
 ## Verifiable feature claims
 
 | Claim | Verification |
@@ -143,6 +196,9 @@ model outputs and screenshots are under
 | Results cannot cross session/calibration/track/age/box boundaries | Parameterized stale-result tests |
 | Saved readings retain exact lossless crop evidence | Asset, evidence ZIP and typed export round-trip tests |
 | The GUI shows local scores independently of VLM | Browser material-reading test |
+| Both provider adapters preserve local readings and exact crop evidence | `test_local_material_evidence_and_provider_audit_survive_shared_review` |
+| Manual capture retains completed detection/material evidence | Manual default/pinned capture regression tests |
+| Records retain camera names and material evidence together | Records and Parquet round-trip test |
 
 Primary upstream references:
 

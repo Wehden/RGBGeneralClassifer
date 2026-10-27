@@ -1,4 +1,4 @@
-# Local Femto Bolt and Bedrock operation
+# Local Femto Bolt operation
 
 ## Install and start
 
@@ -29,6 +29,72 @@ source region `us-west-2`. The default inference profile is
 `us.amazon.nova-2-lite-v1:0`; reasoning is disabled. Credentials are not copied
 into application state. Authentication, permissions, throttling, and timeouts
 appear as recorded request failures.
+
+## VLM providers
+
+Bedrock remains the default for existing archives and queued jobs. The local
+runner shares image preparation, prompts, output validation, capture controls,
+and review storage across Bedrock and OpenRouter. Provider and model are saved
+together. Each queued job retains its selection even if the dashboard changes
+before it runs. An in-flight request finishes on its original provider.
+
+| Provider | Model IDs |
+| --- | --- |
+| Bedrock | `us.amazon.nova-2-lite-v1:0`, `us.amazon.nova-lite-v1:0` |
+| OpenRouter | `amazon/nova-2-lite-v1`, `amazon/nova-lite-v1`, `google/gemini-2.5-flash-lite` |
+
+Set `OPENROUTER_API_KEY` in the environment of the service process to enable
+OpenRouter requests. The key is read at dispatch and is not written to settings,
+request records, or exports. OpenRouter does not need AWS credentials. A missing
+key produces a recorded failure when analysis is requested; camera views and
+archive capture remain available. A desktop console that starts a runner passes
+its environment to that child. An attached console uses the running service's
+environment.
+
+```sh
+# Start or switch to OpenRouter Nova 2 Lite:
+.venv/bin/python -m rgb.local --provider openrouter --model amazon/nova-2-lite-v1
+
+# Compare Gemini on OpenRouter:
+.venv/bin/python -m rgb.local --provider openrouter --model google/gemini-2.5-flash-lite
+
+# Return to Bedrock Nova 2 Lite with the normal AWS profile:
+.venv/bin/python -m rgb.local --provider bedrock --aws-profile default
+
+# Pass the same options when the desktop starts a new runner:
+.venv/bin/python -m rgb.desktop -- --provider openrouter
+```
+
+`RGB_VLM_PROVIDER` and `RGB_MODEL` supply the corresponding CLI defaults.
+Omitting both preserves the saved selection. Explicitly switching provider
+without a model selects that provider's Nova 2 Lite ID. A model ID from the
+other provider is rejected. The dashboard's **Apply provider/model** control
+saves the pair without restarting the service.
+
+OpenRouter uses `https://openrouter.ai/api/v1/chat/completions` with inline JPEGs,
+temperature zero, and latency-based routing. Reasoning is disabled for Nova 2
+Lite and Gemini 2.5 Flash-Lite; Nova Lite has no reasoning option. Neither
+transport retries automatically or switches models or providers after an error.
+The existing worker backoff still applies to subsequent requests. JSON and
+per-box validation must pass before any labels are published. Truncated,
+refused, tool-call, and failed responses remain failed attempts.
+
+Records preserve the selected transport (`endpoint`), model, image hashes,
+raw response, request ID, token usage, and measured completion latency.
+OpenRouter also records the resolved model, upstream provider, and cost and
+reasoning-token fields when returned. Its upstream provider may be Amazon
+Bedrock even though authentication and billing go through OpenRouter.
+Latency samples are separated by provider, model, and workload. Export schema
+8 adds provider selection and OpenRouter metadata; historical rows leave
+unavailable fields empty.
+
+Availability was checked against OpenRouter's public catalog. A subsequent
+[Stepwise webcam check](local-verification.md#openrouter-on-stepwise-with-a-webcam)
+validated 10/10 actual Nova 2 Lite requests through OpenRouter, with a measured
+1.445-second median call time. This repeated single-scene check does not
+establish general vision quality or compare provider latency on the Bolt's
+images. Compare identical archived image batches before changing a production
+default.
 
 ## Controls and configuration
 
@@ -160,7 +226,14 @@ curl -s -H 'Content-Type: application/json' -d '{}' \
   http://127.0.0.1:8080/api/camera/observations
 ```
 
-Use `{"frame_id":"<UUID>"}` to pin a cached frame. Repeated capture of that frame
+Without `frame_id`, capture selects the latest fresh detector-completed frame
+from the current camera session and calibration, including its matching sensor
+evidence. If no such frame is ready, it returns HTTP 503 without saving an
+observation; retry after detection completes.
+
+Use `{"frame_id":"<UUID>"}` to pin a cached frame. A new pinned observation
+requires a matching completed detection result; otherwise it returns HTTP 503
+without saving. Repeated capture of an already archived frame
 returns its original observation ID. Sensor assets are available at
 `/api/events/<observation-id>/assets/{depth_native,ir_native,depth_registered,depth_preview,ir_preview,calibration,metadata}`.
 

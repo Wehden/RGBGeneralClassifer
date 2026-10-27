@@ -129,7 +129,7 @@ def test_pause_api_is_durable_audited_and_preserves_other_controls(client,monkey
     assert result.status_code==200
     assert result.json['detector_threshold']==.39
     assert result.json['display_mode']=='materials'
-    assert c.get('/api/vlm/status').json=={'paused':True,'active':None,'enabled':True,'models':[]}
+    assert c.get('/api/vlm/status').json=={'paused':True,'active':None,'enabled':True,'models':[],'manual_pending':0}
     assert json.loads(store.redis.xrevrange('rgb:settings-updates',count=1)[0][1]['value'])['actor']=='operator'
     assert c.post('/api/settings',json={'vlm_paused':'true'},headers=headers).status_code==400
     assert c.post('/api/settings',json={'vlm_paused':False},headers=headers).json['vlm_paused'] is False

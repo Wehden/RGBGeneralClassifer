@@ -11,10 +11,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from rgb.store import DEFAULT_SETTINGS, Store, StaleEvaluation, candidate_revision, detection_id, now
+from rgb.vlm_providers import PRIMARY_MODEL, FALLBACK_MODEL, model_selection
 
-PRIMARY_MODEL='us.amazon.nova-2-lite-v1:0'
-FALLBACK_MODEL='us.amazon.nova-lite-v1:0'
-LOCAL_DEFAULTS={**DEFAULT_SETTINGS,'selected_model':PRIMARY_MODEL,'model_selection_reason':'initial',
+LOCAL_DEFAULTS={**DEFAULT_SETTINGS,'selected_provider':'bedrock','selected_model':PRIMARY_MODEL,'model_selection_reason':'initial',
                 'capture_paused':False,'capture_interval_s':60}
 
 
@@ -147,6 +146,7 @@ class LocalStore(Store):
         with self.transaction() as db:
             settings={**LOCAL_DEFAULTS,**self._state('settings','current',{},db)}
             settings.update(values,version=settings['version']+1,changed_at=now(),actor=actor)
+            model_selection(settings['selected_provider'],settings['selected_model'])
             self._set(db,'settings','current',settings)
             self._append(db,'rgb:settings-updates',{'kind':'settings','value':encode(settings)})
             return settings
@@ -306,7 +306,7 @@ class LocalStore(Store):
             for reading in readings:
                 key=detection_id(event['event_id'],reading['box_index'])
                 candidate={**reading,'job_id':job['id'],'attempt_id':attempt['attempt_id'],
-                           'model':attempt['model'],'endpoint':'bedrock','observed_at':now()}
+                           'model':attempt['model'],'endpoint':attempt.get('endpoint','bedrock'),'observed_at':now()}
                 projection=self.projection(key)
                 projection.update(candidate=candidate,decision_settings=job['policy'],updated_at=now())
                 if db.execute('SELECT 1 FROM enhancements WHERE job_id=? AND detection_id=?',(job['id'],key)).fetchone():continue

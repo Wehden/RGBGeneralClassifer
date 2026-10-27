@@ -1,5 +1,80 @@
 # Local implementation verification — 2026-10-26
 
+## RGB Console interface
+
+The general desktop app is now **RGB Console**, installed as `rgb-console`.
+The title, source selector, archive and Records view use the camera-reported
+name. Stepwise reports `C922 Pro Stream Webcam` through V4L2; Orbbec names
+come from the SDK. Existing archive IDs and storage paths remain compatible.
+
+The interface groups detection, capture and VLM controls above the live view.
+Thresholds, location, model diagnostics and exports are collapsed into settings.
+The previous desktop toolbar was removed in favor of the shared page controls
+and existing menu shortcuts. A warm background, black rules, square controls
+and primary-color accents replace the previous dark green panels.
+
+Supported camera views switch through 28-pixel icon buttons at the video's
+upper-right corner. The strip is hidden on Stepwise's RGB-only webcam. A
+simulated multi-mode camera exposed RGB, depth, IR and 3D; all four buttons
+updated the selected view and pressed state. Unsupported views are hidden and
+their native menu actions are disabled. This is a browser capability/control
+check, not a new physical depth/IR hardware test.
+
+Actual Chromium checks at 1440×1000 and 390×844 showed the webcam's name and
+live video, no horizontal overflow on the dashboard or Records page, and no
+page errors. Private screenshots are under the OpenRouter run's `ui/` folder.
+The automated run passed 220 Python tests and 24 browser unit tests.
+
+## OpenRouter on Stepwise with a webcam
+
+Checked provider-support commit `10b250c` using Stepwise's Logitech C922
+Pro Stream Webcam (V4L2, 1280×720 RGB). The Linux Qt console attached to the
+local service on `127.0.0.1:8083`; the service reported one stream viewer,
+working YOLOE detection, and approximately 10 delivered camera FPS. No Bolt,
+depth, IR, or AWS profile was used for this check.
+
+One immutable webcam observation contained eight detector proposals. Replaying
+that observation five times produced two four-crop requests per replay, for
+10 requests to OpenRouter model `amazon/nova-2-lite-v1`. For each batch,
+ordered image hashes and prompt hashes matched across all five repetitions.
+The app's normal image preparation and per-box validator were used. Reasoning
+was disabled, and reported reasoning-token usage was zero.
+
+| Measurement | Result |
+| --- | --- |
+| Validated calls | 10/10, all HTTP 200; no failed attempts |
+| Call p50 / p95 | 1,436 / 1,821 ms (nearest-rank percentiles) |
+| Call median / range | 1,445 ms / 1,356–1,821 ms |
+| Complete eight-region analysis | Median 3.239 s; range 3.031–3.635 s |
+| Input / output tokens | 19,560 / 2,446 |
+| Total reported OpenRouter cost | $0.011983 |
+
+Call timing covers the provider adapter, response handling, and application
+validation; it excludes input preparation and archive writes. Complete-analysis
+timing includes dispatch, both sequential requests, persistence, and status
+polling at 200 ms intervals. These ten requests are a small sample, so the
+p95 is provisional. This is a repeated single-scene test, not a diverse
+recognition benchmark or a latency SLA.
+
+All five replays labeled the wall-switch crop `switch`, replacing the detector's
+`keycard`, and labeled an eyewear crop `glasses`, replacing `3D glasses`.
+The person, art-print and other eyewear labels also repeated consistently.
+Two broad scene proposals varied between `person` (4/5 replays) and `office`
+(1/5). Comparison flags were occasionally inconsistent with changed labels.
+Materials were empty except one art-print response listing wood and paper;
+that material result did not repeat. No human-scored accuracy is claimed.
+
+All requests authenticated through OpenRouter using the existing STL.Hub
+secret, loaded into process memory without writing the key to test artifacts.
+OpenRouter reported `Amazon Bedrock` as its upstream provider. Direct Bedrock
+requests numbered zero; no comparison against the earlier Bolt/AWS measurements
+is justified because the images and workload differ.
+
+Private imagery, the SQLite audit archive, raw attempts, replay results and
+`benchmark-summary.json` are retained under
+`~/.local/state/bolt-rgb/stepwise-openrouter-20261026T231859Z/` and are excluded
+from the repository. Automatic capture was paused for this manual test.
+
 The implementation is available for local use. This ledger distinguishes
 contract tests and actual hardware/provider checks from remaining acceptance
 qualification. It does not claim that every procedure in the design was

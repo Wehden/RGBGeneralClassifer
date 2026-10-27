@@ -30,6 +30,13 @@ class CameraBusy(Exception):
     pass
 
 
+def v4l2_name(device):
+    try:
+        return (Path('/sys/class/video4linux')/Path(device).resolve().name/'name').read_text().strip() or 'USB camera'
+    except OSError:
+        return 'USB camera'
+
+
 def v4l2_serial(device):
     node=Path('/sys/class/video4linux')/Path(device).resolve().name/'device'
     for parent in [node.resolve(),*node.resolve().parents]:
@@ -175,6 +182,10 @@ class Camera:
         self.configuration={}
         self.fatal_error=None
 
+    @property
+    def name(self):
+        return self.info.get('name') or (v4l2_name(self.device) if self.backend=='v4l2' else 'Camera')
+
     def start(self):
         self.reserve()
         self.thread=threading.Thread(target=self._run,name='camera',daemon=True)
@@ -249,7 +260,8 @@ class Camera:
             latest=next(reversed(self.frames.values())) if self.frames else None
             age=time.monotonic()-latest.metadata['received_monotonic_s'] if latest else None
             return {'state':self.state if age is None or age<=self.freshness_s else 'stale',
-                    'error':self.error,'backend':self.backend,'device':self.info,'session_id':self.session_id,
+                    'error':self.error,'backend':self.backend,'name':self.name,
+                    'device':{**self.info,'name':self.name},'session_id':self.session_id,
                     'frame_id':latest.id if latest else None,'frame_age_s':age,
                     'channels':list(latest.previews) if latest else [],
                     'profiles':latest.metadata['profiles'] if latest else None,
@@ -361,7 +373,7 @@ class Camera:
         if format_name.strip() in {'Y16','Z16','Y12'}:
             capture.release()
             raise CameraUnavailable('Selected V4L2 node is a depth plane, not a color camera')
-        self.session_id=str(uuid4());sequence=0;self.info={'serial':serial,'path':str(resolved)}
+        self.session_id=str(uuid4());sequence=0;self.info={'name':v4l2_name(self.device),'serial':serial,'path':str(resolved)}
         try:
             while not self.stop_event.is_set():
                 ok,color=capture.read()

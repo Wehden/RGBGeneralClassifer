@@ -29,14 +29,14 @@ spec:
         - name: redis
           image: redis:7.4.6-alpine@sha256:3b73847e72874be07e6657b129a94761662b79bc0f679273757d4218573b2a98
           command: [redis-server]
-          args: [--appendonly, 'yes', --appendfsync, everysec, --dir, /data, --requirepass, '$(REDIS_PASSWORD)', --save, '300 1', --maxmemory, 512mb, --maxmemory-policy, noeviction]
+          args: [--appendonly, 'yes', --appendfsync, everysec, --dir, /data, --requirepass, '$(REDIS_PASSWORD)', --save, '300 1', --maxmemory, 4gb, --maxmemory-policy, noeviction]
           envFrom:
             - secretRef: {name: rgb-runtime}
           ports: [{containerPort: 6379, name: redis}]
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
           resources:
-            requests: {cpu: 50m, memory: 128Mi}
-            limits: {cpu: '1', memory: 768Mi}
+            requests: {cpu: 50m, memory: 4Gi}
+            limits: {cpu: '1', memory: 8Gi}
           readinessProbe: {tcpSocket: {port: redis}, initialDelaySeconds: 3}
           volumeMounts:
             - {name: data, mountPath: /data, subPath: redis}

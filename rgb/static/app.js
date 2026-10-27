@@ -8,6 +8,18 @@ window.addEventListener('pagehide', () => liveVideo.stop());
 window.addEventListener('pageshow', event => { if (event.persisted) live(); });
 function element(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
+function activity(id,state,label) {
+  const light=$(id+'-indicator');if(!light)return;
+  light.dataset.state=state;light.textContent=label;
+}
+function renderDetection(state) {
+  if(typeof state.classification_running==='boolean') {
+    activity('detection',state.classification_running?'on':'off',state.classification_running?'On':'Off');
+  } else if(state.detector) {
+    const running=state.detector.state==='running' && state.state==='running';
+    activity('detection',running?'on':state.detector.state==='unavailable'?'off':'unknown',running?'On':state.detector.state==='unavailable'?'Off':'Waiting');
+  } else activity('detection','unknown','Unknown');
+}
 function date(value) { return new Date(value).toLocaleString(); }
 function sourceLabel(id,metadata) { return metadata?.device?.name||sources.find(s=>s.id===id)?.label||id; }
 function syncViewIcons() {
@@ -33,8 +45,8 @@ function renderCamera(camera) {
   syncViewIcons();
 }
 async function status() {
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
-  catch { $('timing').textContent = 'Camera status unavailable'; }
+  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; renderDetection(s); acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
+  catch { $('timing').textContent = 'Camera status unavailable'; activity('detection','unknown','Unknown'); if($('classification-toggle'))activity('capture','unknown','Unknown'); }
   if(sources.find(s=>s.id===$('source').value)?.local){try{renderCamera(await get('/api/camera/status'));}catch{}}
 }
 function live() {
@@ -133,6 +145,7 @@ function renderCapture(state) {
   const capture=state.capture;
   if(!capture||!$('pause-capture'))return;
   capturePaused=capture.paused;
+  activity('capture',capturePaused?'off':'on',capturePaused?'Off':'On');
   $('pause-capture').textContent=capturePaused?'Resume capture':'Pause capture';
   $('pause-capture').disabled=captureChanging;
   if(!captureIntervalDirty&&document.activeElement!==$('capture-interval'))$('capture-interval').value=capture.interval_s;
@@ -141,6 +154,8 @@ function renderCapture(state) {
 }
 function renderVlm(state) {
   vlmPaused=state.paused;
+  activity('vlm',state.active?'active':!state.enabled||state.paused?'off':'on',state.active?'Active':!state.enabled?'Disabled':state.paused?'Off':'Ready');
+  if($('vlm-backlog'))$('vlm-backlog').textContent=state.manual_queue!=null?`Queue: ${state.manual_queue+(state.live_pending?1:0)} · ${state.manual_queue} manual${state.live_pending?' · 1 latest frame':''}`:state.manual_pending!=null?`${state.manual_pending} manual requests pending`:'Queue unknown';
   $('vlm-model').textContent=`Label refinement: ${(state.models||[]).join(', ')||'Disabled'}`;
   $('pause-vlm').textContent=state.paused?'Resume VLM':'Pause VLM';
   $('pause-vlm').disabled=vlmChanging||!state.enabled;
@@ -152,7 +167,7 @@ function renderVlm(state) {
       $('vlm-provider').value=state.selected_provider;
       modelChoices(state.selected_provider,state.selected_model);
     }
-    $('provider-status').textContent='';
+    $('provider-status').textContent=modelDirty?'Not applied':`Applied · ${providerCatalog.find(p=>p.id===state.selected_provider)?.label||state.selected_provider} · ${providerCatalog.find(p=>p.id===state.selected_provider)?.models.find(m=>m.id===state.selected_model)?.label||state.selected_model}`;
     const measured=(state.latencies||[]).filter(row=>row.provider===state.selected_provider&&row.model===state.selected_model);
     const latest=measured.at(-1);
     $('provider-latency').textContent=latest ? `${latest.workload.crop_count} crops · p50 ${(latest.p50_ms/1000).toFixed(2)} s · p95 ${(latest.p95_ms/1000).toFixed(2)} s · n=${latest.samples}${latest.samples<20?' · provisional':''}` : '';
@@ -161,7 +176,7 @@ function renderVlm(state) {
     if(state.last_error)$('vlm-state').textContent+=` · ${state.last_error} · backoff ${state.backoff_s.toFixed(1)} s`;
   }
 }
-async function vlmStatus(){const generation=vlmGeneration,captureRevision=captureGeneration;try {const state=await get('/api/vlm/status');if(!vlmChanging&&generation===vlmGeneration)renderVlm(state);if(!captureChanging&&captureRevision===captureGeneration)renderCapture(state);}catch(e){if(generation===vlmGeneration)$('vlm-state').textContent=`VLM status unavailable: ${e.message}`;}}
+async function vlmStatus(){const generation=vlmGeneration,captureRevision=captureGeneration;try {const state=await get('/api/vlm/status');if(!vlmChanging&&generation===vlmGeneration)renderVlm(state);if(!captureChanging&&captureRevision===captureGeneration)renderCapture(state);}catch(e){if(generation===vlmGeneration){$('vlm-state').textContent=`VLM status unavailable: ${e.message}`;activity('vlm','unknown','Unknown');$('vlm-backlog').textContent='Queue unknown';}if(captureRevision===captureGeneration&&$('pause-capture'))activity('capture','unknown','Unknown');}}
 $('pause-vlm').onclick=async()=>{vlmChanging=true;vlmGeneration++;$('pause-vlm').disabled=true;try {const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({vlm_paused:!vlmPaused})});if(!r.ok)throw new Error(`Save failed (${r.status})`);const saved=await r.json();vlmPaused=saved.vlm_paused;$('pause-vlm').textContent=vlmPaused?'Resume VLM':'Pause VLM';vlmChanging=false;await vlmStatus();}catch(e){$('vlm-state').textContent=e.message;}finally{vlmChanging=false;$('pause-vlm').disabled=false;}};
 vlmStatus();setInterval(vlmStatus,2000);
 if ($('camera-channel')) $('camera-channel').onchange=live;
@@ -177,27 +192,27 @@ async function saveCapture(values) {
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify(values)});
     if(!r.ok){let message=`Save failed (${r.status})`;try{message=(await r.json()).error||message;}catch{}throw new Error(message);}
     const saved=await r.json();capturePaused=saved.capture_paused;
-    if('capture_interval_s' in values)captureIntervalDirty=false;
+    if('capture_interval_s' in values){captureIntervalDirty=false;$('apply-capture-interval').textContent='Applied';}
     captureChanging=false;renderCapture({capture:{paused:saved.capture_paused,interval_s:saved.capture_interval_s}});
     await vlmStatus();
   } catch(error) {$('capture-state').textContent=error.message;}
   finally {captureChanging=false;$('pause-capture').disabled=false;$('apply-capture-interval').disabled=false;}
 }
 if ($('pause-capture')) $('pause-capture').onclick=()=>saveCapture({capture_paused:!capturePaused});
-if ($('capture-interval')) $('capture-interval').oninput=()=>{captureIntervalDirty=true;};
+if ($('capture-interval')) $('capture-interval').oninput=()=>{captureIntervalDirty=true;$('apply-capture-interval').textContent='Set';};
 if ($('apply-capture-interval')) $('apply-capture-interval').onclick=()=>{
   const interval=Number($('capture-interval').value);
   if(!Number.isFinite(interval)||interval<1||interval>86400){$('capture-state').textContent='Choose 1 to 86400 seconds';return;}
   return saveCapture({capture_interval_s:interval});
 };
-if ($('vlm-provider')) $('vlm-provider').onchange=()=>{modelDirty=true;modelChoices($('vlm-provider').value);};
-if ($('vlm-model-choice')) $('vlm-model-choice').onchange=()=>{modelDirty=true;};
+if ($('vlm-provider')) $('vlm-provider').onchange=()=>{modelDirty=true;$('provider-status').textContent='Not applied';modelChoices($('vlm-provider').value);};
+if ($('vlm-model-choice')) $('vlm-model-choice').onchange=()=>{modelDirty=true;$('provider-status').textContent='Not applied';};
 if ($('select-vlm-model')) $('select-vlm-model').onclick=async()=>{
   const provider=$('vlm-provider').value,model=$('vlm-model-choice').value;
   const choice=providerCatalog.find(p=>p.id===provider)?.models.find(m=>m.id===model);
   if(!choice)return;
   vlmGeneration++;modelChanging=true;$('select-vlm-model').disabled=true;
-  $('vlm-provider').disabled=true;$('vlm-model-choice').disabled=true;
+  $('vlm-provider').disabled=true;$('vlm-model-choice').disabled=true;$('provider-status').textContent='Applying…';
   try {
     const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},
       body:JSON.stringify({selected_provider:provider,selected_model:model,model_selection_reason:choice.selection_reason})});
@@ -259,10 +274,12 @@ function renderClassification(s){
   $('classification-mode').value=s.record_observations!==false?'record':'preview';
   $('classification-toggle').textContent=classificationRunning?'Pause classification':'Start classification';
   $('classification-toggle').disabled=false;
+  activity('detection','waiting','Pending');activity('capture','waiting','Pending');
   $('classification-state').textContent='Control saved · awaiting Uno Q';
 }
 function acknowledgeClassification(s){
   if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
+  activity('capture',s.classification_running&&s.record_observations?'on':'off',s.classification_running&&s.record_observations?'Recording':'Off');
   $('classification-state').textContent=s.classification_running?(s.record_observations?'Running · recording observations':'Running · preview only'):'Paused · camera on';
 }
 async function setClassification(running){

@@ -170,7 +170,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
     @app.get('/api/vlm/status')
     def vlm_status():
         if local_runtime:return jsonify(local_runtime.status())
-        return jsonify(paused=store.settings()['vlm_paused'],active=store.active_attempt(),enabled=store.analysis_enabled,models=analysis_models or [])
+        return jsonify(paused=store.settings()['vlm_paused'],active=store.active_attempt(),enabled=store.analysis_enabled,models=analysis_models or [],manual_pending=store.redis.hlen('rgb:manual:pending'))
 
     @app.get('/api/board-policy/<source_id>')
     def board_policy(source_id):

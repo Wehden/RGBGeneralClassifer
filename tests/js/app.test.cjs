@@ -274,3 +274,43 @@ test('individual VLM request refreshes a terminal detail and restarts polling',a
   assert.equal(gets,2);assert.equal(timers,1);
   assert.match(node('detail').querySelector('.analysis-state').textContent,/queued/);
 });
+
+test('activity lights distinguish detection, capture, and an active paused VLM',()=>{
+  const {context,node}=setup();
+  context.renderDetection({state:'running',detector:{state:'running'}});
+  assert.equal(node('detection-indicator').textContent,'On');
+  context.renderCapture({capture:{paused:true,interval_s:60}});
+  assert.equal(node('capture-indicator').textContent,'Off');
+  context.renderVlm({...providerState(),paused:true,active:{job_id:'running'},manual_queue:3,live_pending:'frame'});
+  assert.equal(node('vlm-indicator').textContent,'Active');
+  assert.equal(node('vlm-backlog').textContent,'Queue: 4 · 3 manual · 1 latest frame');
+  context.renderVlm({...providerState(),paused:true,active:null,manual_queue:0});
+  assert.equal(node('vlm-indicator').textContent,'Off');
+  assert.equal(node('vlm-backlog').textContent,'Queue: 0 · 0 manual');
+  context.renderDetection({state:'stale',detector:{state:'running'}});
+  assert.equal(node('detection-indicator').dataset.state,'unknown');
+});
+
+test('board capture light waits for acknowledgement and separates preview from recording',()=>{
+  const {context,node}=setup();
+  context.renderClassification({version:7,classification_running:true,record_observations:true});
+  assert.equal(node('capture-indicator').textContent,'Pending');
+  context.acknowledgeClassification({applied_settings_version:6,classification_running:true,record_observations:true});
+  assert.equal(node('capture-indicator').textContent,'Pending');
+  context.acknowledgeClassification({applied_settings_version:7,classification_running:true,record_observations:true});
+  assert.equal(node('capture-indicator').textContent,'Recording');
+  context.renderClassification({version:8,classification_running:true,record_observations:false});
+  context.acknowledgeClassification({applied_settings_version:8,classification_running:true,record_observations:false});
+  assert.equal(node('capture-indicator').textContent,'Off');
+});
+
+test('provider Apply feedback survives polling and edits require another Apply',async()=>{
+  const {context,node}=setup();context.renderVlm(providerState());
+  node('vlm-provider').value='openrouter';node('vlm-provider').onchange();
+  assert.equal(node('provider-status').textContent,'Not applied');
+  context.fetch=async(url,options)=>json(options?{}:{...providerState(),selected_provider:'openrouter',selected_model:'amazon/nova-2-lite-v1'});
+  await node('select-vlm-model').onclick();
+  assert.equal(node('provider-status').textContent,'Applied · OpenRouter · Nova 2 Lite');
+  context.renderVlm({...providerState(),selected_provider:'openrouter',selected_model:'amazon/nova-2-lite-v1'});
+  assert.equal(node('provider-status').textContent,'Applied · OpenRouter · Nova 2 Lite');
+});

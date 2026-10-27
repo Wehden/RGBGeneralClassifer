@@ -171,3 +171,11 @@ def test_live_decoder_script_and_blob_images_allowed(client):
     assert b'/static/live-video.js' in page.data
     assert "img-src 'self' blob:" in page.headers['Content-Security-Policy']
     assert c.get('/static/live-video.js').status_code == 200
+
+
+def test_vlm_status_reports_manual_pending_requests(client):
+    c, store = client
+    store.redis.hset('rgb:manual:pending', 'event:all', 'job-1')
+    assert c.get('/api/vlm/status').json['manual_pending'] == 1
+    store.redis.hdel('rgb:manual:pending', 'event:all')
+    assert c.get('/api/vlm/status').json['manual_pending'] == 0

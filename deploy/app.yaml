@@ -36,7 +36,7 @@ spec:
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
           resources:
             requests: {cpu: 50m, memory: 4Gi}
-            limits: {cpu: '1', memory: 8Gi}
+            limits: {cpu: '1', memory: 12Gi}
           readinessProbe: {tcpSocket: {port: redis}, initialDelaySeconds: 3}
           volumeMounts:
             - {name: data, mountPath: /data, subPath: redis}

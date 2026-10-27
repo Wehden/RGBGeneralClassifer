@@ -58,6 +58,12 @@ while preview/detection continue; **Capture once** makes an intentional snapshot
 Camera views include RGB, Depth, IR and a streaming **3D RGB-D point cloud**
 with orbit, pan, zoom and RGB/depth shading.
 
+The local vision upgrade uses **YOLOE26 small at 640 px** and a separate
+**SigLIP2 RGB-crop material pass**, with explicit uncertain results and crop
+evidence. Prepare the offline models once using the
+[local vision setup and benchmark guide](docs/local-vision.md). Medium remains
+selectable; the original nano detector is used when the new artifacts are absent.
+
 The retained board deployment is an Arduino Uno Q system for work with Seattle
 University students. The Portenta X8 prototype is retained for cooling experiments. The current trial uses YOLOE-26n prompt-free ONNX with 4,585 class names. The retained first version uses EfficientDet-Lite0 COCO. Materials mode uses a separate 12-label prompted YOLOE graph. The board draws live bounding
 boxes. A k3s service archives observations in Redis Streams and serves a camera,

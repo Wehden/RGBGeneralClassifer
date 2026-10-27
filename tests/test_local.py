@@ -493,7 +493,7 @@ def test_openrouter_shared_validation_audit_projection_status_and_export(openrou
     with app.test_client().get('/api/review/export/parquet') as response:
         assert response.status_code==200
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-            assert json.loads(archive.read('manifest.json'))['schema_version']==8
+            assert json.loads(archive.read('manifest.json'))['schema_version']==9
             rows=pq.read_table(pa.BufferReader(archive.read('model_attempts.parquet'))).to_pylist()
             assert rows[-1]['endpoint']=='openrouter' and rows[-1]['cost']==.0003
             assert rows[-1]['reasoning_tokens']==0

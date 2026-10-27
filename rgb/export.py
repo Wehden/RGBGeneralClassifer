@@ -30,7 +30,11 @@ SCHEMAS={
 SCHEMAS['observations']=pa.schema(list(SCHEMAS['observations'])+[
     ('frame_id',pa.string()),('session_id',pa.string()),('calibration_sha256',pa.string()),
     ('depth_scale_mm',pa.float64()),('frame_metadata_json',pa.string()),('sensor_assets_json',pa.string())])
-SCHEMAS['detections']=pa.schema(list(SCHEMAS['detections'])+[('frame_id',pa.string()),('depth',DEPTH)])
+SCHEMAS['detections']=pa.schema(list(SCHEMAS['detections'])+[('frame_id',pa.string()),('depth',DEPTH),('local_material_json',pa.string())])
+SCHEMAS['material_readings']=pa.schema(list(SCHEMAS['material_readings'])+[
+    ('status',pa.string()),('best_candidate',pa.string()),('similarity',pa.float64()),
+    ('margin',pa.float64()),('score_type',pa.string()),('source_frame_id',pa.string()),
+    ('crop_sha256',pa.string()),('value_json',pa.string())])
 SCHEMAS['model_attempts']=pa.schema(list(SCHEMAS['model_attempts'])+[
     ('frame_id',pa.string()),('session_id',pa.string()),('request_id',pa.string()),
     ('ordered_image_sha256',pa.list_(pa.string())),('inputs_json',pa.string()),
@@ -62,12 +66,21 @@ def rows(store,table,stops,settings,projections):
                     c=json.loads(projection[0]) if projection and projection[0] else {}
                     displayed=value(d,c,settings)
                     if table=='material_readings':
+                        local=d.get('local_material')
+                        if local:
+                            yield dict(provider='siglip2',detection_id=d['detection_id'],track_id=d.get('track_id'),
+                                       observation_id=event['event_id'],source_id=event['source_id'],
+                                       observed_at=timestamp(event['observed_at']),material_index=0,label=local['label'],
+                                       confidence=None,reason='Visual similarity; uncalibrated material identification',
+                                       accepted=local['status']=='identified',model=local['model'],attempt_id=None,
+                                       **{key:local.get(key) for key in ['status','best_candidate','similarity','margin','score_type','source_frame_id','crop_sha256']},
+                                       value_json=json.dumps(local,sort_keys=True))
                         if d.get('label_kind')=='material':
                             yield dict(provider='detector',detection_id=d['detection_id'],track_id=d.get('track_id'),observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),material_index=0,label=d['label'],confidence=d['confidence'],reason=None,accepted=d['confidence']>=settings['detector_threshold'],model=event['detector']['model'],attempt_id=None)
                         for j,m in enumerate(c.get('materials',[])):
                             yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),provider='vlm',material_index=j,label=m['label'],confidence=m['confidence'],reason=m['reason'],accepted=m['confidence']>=settings['vlm_threshold'],model=c.get('model'),attempt_id=c.get('attempt_id'))
                         continue
-                    yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),display_mode=settings['display_mode'],observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),box_index=i,ymin=d['box'][0],xmin=d['box'][1],ymax=d['box'][2],xmax=d['box'][3],initial_label=d['label'],initial_label_kind=d.get('label_kind','object'),initial_class_id=d['class_id'],initial_confidence=d['confidence'],enhanced_label=c.get('label'),enhanced_confidence=c.get('confidence'),display_label=displayed['label'],display_confidence=displayed['confidence'],display_provider=displayed['provider'],comparison=c.get('comparison'),reason=c.get('reason'),model=c.get('model'),attempt_id=c.get('attempt_id'),vlm_threshold=settings['vlm_threshold'],settings_version=settings['version'],analysis_status=projection[1] if projection else 'not_analyzed',live_label=d.get('live_value',{}).get('display_label',d.get('live_value',{}).get('label')),live_display_mode=d.get('live_value',{}).get('display_mode'),live_match_method=d.get('live_value',{}).get('match_method'),live_confidence=d.get('live_value',{}).get('display_confidence',d.get('live_value',{}).get('confidence')),live_reference_detection_id=d.get('live_value',{}).get('detection_id'),live_match_iou=d.get('live_value',{}).get('match_iou'),live_hash_distance=d.get('live_value',{}).get('match_hash_distance'),live_age_s=d.get('live_value',{}).get('match_age_s'),frame_id=event.get('frame_id'),depth=d.get('depth'))
+                    yield dict(detection_id=d['detection_id'],track_id=d.get('track_id'),display_mode=settings['display_mode'],observation_id=event['event_id'],source_id=event['source_id'],observed_at=timestamp(event['observed_at']),box_index=i,ymin=d['box'][0],xmin=d['box'][1],ymax=d['box'][2],xmax=d['box'][3],initial_label=d['label'],initial_label_kind=d.get('label_kind','object'),initial_class_id=d['class_id'],initial_confidence=d['confidence'],enhanced_label=c.get('label'),enhanced_confidence=c.get('confidence'),display_label=displayed['label'],display_confidence=displayed['confidence'],display_provider=displayed['provider'],comparison=c.get('comparison'),reason=c.get('reason'),model=c.get('model'),attempt_id=c.get('attempt_id'),vlm_threshold=settings['vlm_threshold'],settings_version=settings['version'],analysis_status=projection[1] if projection else 'not_analyzed',live_label=d.get('live_value',{}).get('display_label',d.get('live_value',{}).get('label')),live_display_mode=d.get('live_value',{}).get('display_mode'),live_match_method=d.get('live_value',{}).get('match_method'),live_confidence=d.get('live_value',{}).get('display_confidence',d.get('live_value',{}).get('confidence')),live_reference_detection_id=d.get('live_value',{}).get('detection_id'),live_match_iou=d.get('live_value',{}).get('match_iou'),live_hash_distance=d.get('live_value',{}).get('match_hash_distance'),live_age_s=d.get('live_value',{}).get('match_age_s'),frame_id=event.get('frame_id'),depth=d.get('depth'),local_material_json=json.dumps(d['local_material'],sort_keys=True) if d.get('local_material') else None)
     else:
         key={'detection_updates':'rgb:detection-updates','model_attempts':'rgb:model-attempts','settings':'rgb:settings-updates','evaluations':'rgb:evaluations','location_updates':'rgb:location-updates','analysis_actions':'rgb:analysis-actions'}[table]
         for row,fields in store.stream(key,stops[key]):
@@ -102,7 +115,7 @@ def _build_export(store,format,stops,settings):
             status={'started':'running','success':'read_complete','failed':'failed'}.get(value['outcome'],'unknown')
             projections.execute('UPDATE projection SET status=? WHERE detection_id=?',(status,key))
     projections.commit()
-    manifest={'schema_version':8,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
+    manifest={'schema_version':9,'exported_at':now(),'format':format,'stream_watermarks':stops,'settings':settings,'tables':{}}
     try:
         for name,schema in SCHEMAS.items():
             path=root/(name+'.'+format)

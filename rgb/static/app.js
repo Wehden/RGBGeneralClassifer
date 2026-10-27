@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
+let archiveLoaded=false;
 const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
   new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
 const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
@@ -101,7 +102,12 @@ async function show(id, refresh=false) {
     }
     event.detections.forEach((d,i) => {
       const card = element('section',undefined,'reading'); const c = d.enhancement;
-      card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'Qwen'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
+      card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'siglip2' ? 'SigLIP2' : d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'VLM'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
+      if(d.local_material) {
+        const m=d.local_material;
+        card.append(element('p',`Local material: ${m.status==='identified'?m.label:'uncertain'} · best visual match ${m.best_candidate} · similarity ${m.similarity.toFixed(3)} · margin ${m.margin.toFixed(3)} · uncalibrated`,'comparison'));
+        if(m.crop_asset){const crop=element('details');crop.append(element('summary','Material classifier crop'));const img=element('img');img.src=`/api/events/${id}/assets/material_crop_${i}`;img.alt='RGB crop used by SigLIP2';img.className='sensor-preview';crop.append(img,element('p',`Read from frame ${m.source_frame_id} · ${m.model}`,'muted'));card.append(crop);}
+      }
       if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));
       if (event.settings.display_mode === 'materials' && c?.materials) { for (const m of c.materials) { card.append(element('p',`${m.label} · ${(m.confidence*100).toFixed(1)}%`,'comparison'),element('p',m.reason)); } }
       if (c && event.settings.display_mode !== 'materials') { card.append(element('p',`${d.label} → ${c.label} · ${c.comparison}`,'comparison'),element('p',c.reason)); if (!d.enhancement_accepted) card.append(element('p',`VLM ${(c.confidence*100).toFixed(1)}% · threshold ${(event.settings.vlm_threshold*100).toFixed(0)}%`,'muted')); }
@@ -119,11 +125,17 @@ async function show(id, refresh=false) {
   } catch (e) { if(!refresh || !reviewIsEditing(target))target.replaceChildren(element('p',e.message));else detailTimer=setTimeout(()=>show(id,true),3000); }
 }
 function reviewIsEditing(target) { return [...target.querySelectorAll('details[data-evaluation]')].some(d=>d.open||d.querySelector('form').dataset.dirty==='true'); }
+function renderArchiveStatus() {
+  if(!archiveLoaded)return;
+  $('archive-status').textContent=$('events').children.length?'':$('pause-capture')?
+    capturePaused?'Capture paused. Use Capture once or resume automatic capture.':'Waiting for the first capture.':
+    'Waiting for the first detected object.';
+}
 async function load(older=false) {
   try { const events = await get('/api/events'+(older && cursor ? '?before='+encodeURIComponent(cursor) : '')); if (!older) $('events').replaceChildren();
     for (const event of events) { const b = element('button',undefined,'event'); const img = element('img'); img.src = `/api/events/${event.event_id}/image.jpg`; img.alt = ''; img.loading = 'lazy'; const info = element('div'); info.append(element('strong',[...new Set(event.detections.map(d=>d.display_label))].join(', ')||'No detections'),element('span',date(event.observed_at)),element('span',`${sourceLabel(event.source_id,event.frame_metadata)} · ${event.analysis.status.replaceAll('_',' ')}`)); b.append(img,info); b.onclick = () => show(event.event_id); $('events').append(b); }
-    if (events.length) cursor = events.at(-1).cursor; $('older').disabled = events.length < 50; $('archive-status').textContent = $('events').children.length ? '' : 'Waiting for the first detected object.';
-  } catch (e) { $('archive-status').textContent = `Archive unavailable: ${e.message}`; }
+    if (events.length) cursor = events.at(-1).cursor; $('older').disabled = events.length < 50; archiveLoaded=true;renderArchiveStatus();
+  } catch (e) { archiveLoaded=false;$('archive-status').textContent = `Archive unavailable: ${e.message}`; }
 }
 function syncThresholds() { $('detector-value').textContent=Number($('detector-threshold').value).toFixed(2); $('vlm-value').textContent=Number($('vlm-threshold').value).toFixed(2); }
 $('detector-threshold').oninput=syncThresholds; $('vlm-threshold').oninput=syncThresholds;
@@ -145,6 +157,7 @@ function renderCapture(state) {
   const capture=state.capture;
   if(!capture||!$('pause-capture'))return;
   capturePaused=capture.paused;
+  renderArchiveStatus();
   activity('capture',capturePaused?'off':'on',capturePaused?'Off':'On');
   $('pause-capture').textContent=capturePaused?'Resume capture':'Pause capture';
   $('pause-capture').disabled=captureChanging;
@@ -153,6 +166,10 @@ function renderCapture(state) {
   if(state.storage?.observations>0&&!$('events').children.length)load();
 }
 function renderVlm(state) {
+  if(state.local_materials&&$('local-material-state')) {
+    const m=state.local_materials;
+    $('local-material-state').textContent=`Local materials: ${m.state}${m.inference_ms==null?'':` · ${m.inference_ms.toFixed(0)} ms per crop`}${m.error?' · '+m.error:''}`;
+  }
   vlmPaused=state.paused;
   activity('vlm',state.active?'active':!state.enabled||state.paused?'off':'on',state.active?'Active':!state.enabled?'Disabled':state.paused?'Off':'Ready');
   if($('vlm-backlog'))$('vlm-backlog').textContent=state.manual_queue!=null?`Queue: ${state.manual_queue+(state.live_pending?1:0)} · ${state.manual_queue} manual${state.live_pending?' · 1 latest frame':''}`:state.manual_pending!=null?`${state.manual_pending} manual requests pending`:'Queue unknown';

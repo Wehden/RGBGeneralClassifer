@@ -1,6 +1,12 @@
 # Local Femto Bolt and Bedrock: feature definition and verifiable design
 
-Revision 2 · October 26, 2026 · implementation specification.
+Revision 3 · October 27, 2026 · implementation specification.
+
+The initial local/Bedrock specification below is extended by
+[local vision and shared-provider feature claims](local-vision.md). The current
+implementation integrates the upstream RGB Console UI and VLM adapter contract
+with benchmark-selected YOLOE small and a separate offline SigLIP2 crop worker.
+Bedrock Nova 2 Lite with profile `default` remains the configured choice.
 
 The user selected Nova 2 Lite as the initial model and authorized falling back
 to Nova Lite if latency becomes a problem. This document defines the requested

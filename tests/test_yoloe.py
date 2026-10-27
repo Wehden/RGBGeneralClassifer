@@ -83,6 +83,7 @@ def test_tracking_and_display_do_not_mutate_raw_proposals(client,event):
     from board.transport import observation_payload
     import uuid
     model=object.__new__(Detector)
+    model.backend='onnxruntime'
     model.size=320;model.labels=['fan'];model.threshold=.4;model.input_name='images'
     model.session=Mock()
     model.session.run.return_value=[np.array([[[0,0,100,100,.8,0]]],dtype=np.float32)]

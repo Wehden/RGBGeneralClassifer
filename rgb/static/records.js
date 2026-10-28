@@ -22,7 +22,12 @@ async function search(before=null) {
       cell(tr,score(r.initial_label,r.initial_confidence));cell(tr,score(r.enhanced_label,r.enhanced_confidence));
       const local=r.local_material;
       const materialTexts=[];
-      if(local)materialTexts.push(`Local: ${local.status==='identified'?local.label:'uncertain'} · similarity ${local.similarity.toFixed(3)} (uncalibrated)`);
+      if(local) {
+        const reading=local.score_type==='supervised_material_head_score'
+          ? `learned score ${local.score.toFixed(3)} (appearance estimate)`
+          : `similarity ${local.similarity.toFixed(3)} (uncalibrated)`;
+        materialTexts.push(`Local: ${local.status==='identified'?local.label:'uncertain'} · ${reading}`);
+      }
       if(r.materials?.length)materialTexts.push('VLM: '+r.materials.map(m=>score(m.label,m.confidence)).join(' · '));
       cell(tr,materialTexts.join(' / ')||'Not read');cell(tr,r.analysis_status);
       const link=document.createElement('a'); link.href='/#event/'+r.observation_id;link.textContent='Open observation';cell(tr,'').append(link);$('rows').append(tr);

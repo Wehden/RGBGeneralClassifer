@@ -195,6 +195,12 @@ settings were not modified.
 
 ## Verifiable feature claims
 
+For the learned SigLIP2 material head and partial vision fine-tuning, see the
+[distillation plan](material-distillation-plan.md),
+[repeatable process](material-distillation-process.md) and
+[training results](material-distillation-results.md). Its acceptance policy
+uses the learned head's score rather than the zero-shot cosine threshold.
+
 | Claim | Verification |
 |---|---|
 | Small/medium artifacts and class mappings are verified before inference | Checksum validation and recorded manifests |

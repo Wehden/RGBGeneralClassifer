@@ -221,7 +221,9 @@ class LocalRuntime:
         try:
             from rgb.materials import MaterialClassifier
             classifier=MaterialClassifier(self.material_dir,self.material_device)
-            self.material_status.update(state='running',config=classifier.config)
+            score_type=('supervised_material_head_score' if classifier.manifest.get('classifier')
+                        else 'uncalibrated_image_text_similarity')
+            self.material_status.update(state='running',config=classifier.config,score_type=score_type)
         except Exception as exc:
             self.material_status.update(state='unavailable',error=f'{type(exc).__name__}: {str(exc)[:250]}')
             return

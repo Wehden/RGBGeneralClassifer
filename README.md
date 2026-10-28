@@ -64,6 +64,13 @@ evidence. Prepare the offline models once using the
 [local vision setup and benchmark guide](docs/local-vision.md). Medium remains
 selectable; the original nano detector is used when the new artifacts are absent.
 
+An experimental learned material model now trains from two-pass Nova labels
+on retained RGB captures plus disjoint annotated MINC controls. See the
+[overall plan](docs/material-distillation-plan.md),
+[repeatable training process](docs/material-distillation-process.md) and
+[measured results](docs/material-distillation-results.md). The exported
+student is selectable with `--materials-model-dir`.
+
 The retained board deployment is an Arduino Uno Q system for work with Seattle
 University students. The Portenta X8 prototype is retained for cooling experiments. The current trial uses YOLOE-26n prompt-free ONNX with 4,585 class names. The retained first version uses EfficientDet-Lite0 COCO. Materials mode uses a separate 12-label prompted YOLOE graph. The board draws live bounding
 boxes. A k3s service archives observations in Redis Streams and serves a camera,

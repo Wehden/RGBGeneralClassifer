@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from common.geometry import bounds
-from rgb import agreement
+from rgb import agreement, material_agreement
 from rgb.vlm_providers import BedrockProvider, PRIMARY_MODEL, ReviewRequest
 
 
@@ -37,7 +37,7 @@ def jpeg(image):
     return stream.getvalue()
 
 
-def prepare(receipts, output, scene_indices):
+def prepare(receipts, output, scene_indices, protocol=agreement):
     """Deduplicate only exactly identical crop pixels; retain every prediction."""
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     evidence = output/'evidence'
@@ -45,8 +45,8 @@ def prepare(receipts, output, scene_indices):
     manifest_path = output/'manifest.json'
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
-        if (manifest['matching_implementation_sha256'] != agreement.IMPLEMENTATION_SHA256
-                or manifest['system'] != agreement.SYSTEM):
+        if (manifest['matching_implementation_sha256'] != protocol.IMPLEMENTATION_SHA256
+                or manifest['system'] != protocol.SYSTEM):
             raise ValueError('Review protocol changed; use a new output directory')
         if manifest['scene_indices'] != scene_indices:
             raise ValueError('Scene selection changed; use a new output directory')
@@ -57,7 +57,7 @@ def prepare(receipts, output, scene_indices):
             if digest(source['file']) != source['sha256']:
                 raise ValueError('Source frame changed')
         for batch in manifest['batches']:
-            if batch['prompt'] != agreement.prompt(len(batch['case_ids'])):
+            if batch['prompt'] != protocol.prompt(len(batch['case_ids'])):
                 raise ValueError('Review prompt changed')
             for image in batch['images']:
                 if digest(image['file']) != image['sha256']:
@@ -127,20 +127,21 @@ def prepare(receipts, output, scene_indices):
                            'file':case['crop_file'], 'sha256':case['crop_sha256']}
                           for index, case in enumerate(selected))
             batches.append({'batch_id':batch_id, 'case_ids':[c['case_id'] for c in selected],
-                            'prompt':agreement.prompt(len(selected)), 'images':images})
+                            'prompt':protocol.prompt(len(selected)), 'images':images})
     manifest = {'schema':1, 'created_at':datetime.now(timezone.utc).isoformat(),
-                'matching_implementation_sha256':agreement.IMPLEMENTATION_SHA256,
-                'matching_policy':agreement.OBJECT_ALIASES, 'system':agreement.SYSTEM,
+                'matching_implementation_sha256':protocol.IMPLEMENTATION_SHA256,
+                'matching_policy':getattr(protocol, 'OBJECT_ALIASES', {}), 'system':protocol.SYSTEM,
                 'scene_indices':scene_indices, 'sources':list(sources.values()),
                 'detector_receipts':[{'file':str(p.resolve()), 'sha256':digest(p)} for p in receipts],
                 'cases':cases, 'batches':batches, 'passes':2,
                 'design':'Two full blinded sweeps; identical prompts/images, separate calls, temperature zero',
-                'scope':'Candidate-box precision proxy; no recall, ground-truth accuracy or localization IoU claim'}
+                'scope':getattr(protocol, 'SCOPE',
+                                'Candidate-box precision proxy; no recall, ground-truth accuracy or localization IoU claim')}
     write_json(manifest_path, manifest)
     return manifest
 
 
-def collect(manifest, output):
+def collect(manifest, output, protocol=agreement):
     cases = [dict(case, reviews=[None, None]) for case in manifest['cases']]
     lookup = {case['case_id']:case for case in cases}
     requests, errors, input_tokens, output_tokens = 0, 0, 0, 0
@@ -156,13 +157,17 @@ def collect(manifest, output):
             if receipt['status'] != 'ok':
                 errors += 1
                 continue
-            reviews = agreement.parse_review(receipt['response_text'], len(batch['case_ids']))
+            reviews = protocol.parse_review(receipt['response_text'], len(batch['case_ids']))
             for index, case_id in enumerate(batch['case_ids']):
                 lookup[case_id]['reviews'][pass_index] = reviews[index]
-    summary = agreement.summarize(cases)
+    summary = protocol.summarize(cases)
     summary.update(unique_cases=len(cases), scenes=len(manifest['sources']),
                    calls_recorded=requests, calls_planned=len(manifest['batches'])*2,
                    calls_failed_or_incomplete=errors, input_tokens=input_tokens, output_tokens=output_tokens)
+    if protocol is not agreement:
+        write_json(output/'cases.json', cases)
+        write_json(output/'summary.json', summary)
+        return summary
     summary['per_scene'] = {
         str(index):agreement.summarize([case for case in cases if case['scene_index'] == index])['models']
         for index in manifest['scene_indices']}
@@ -203,7 +208,7 @@ def collect(manifest, output):
     return summary
 
 
-def run(manifest, output, profile, region, model, limit_calls):
+def run(manifest, output, profile, region, model, limit_calls, protocol=agreement):
     directory = output/'requests'
     directory.mkdir(exist_ok=True)
     provider = BedrockProvider(profile=profile, region=region, read_timeout=60)
@@ -218,7 +223,7 @@ def run(manifest, output, profile, region, model, limit_calls):
                 # A started receipt could represent a billed but interrupted request; never replay it.
                 continue
             if completed >= limit_calls:
-                return collect(manifest, output)
+                return collect(manifest, output, protocol)
             images = tuple((image['label'], Path(image['file']).read_bytes()) for image in batch['images'])
             receipt = {'batch_id':batch['batch_id'], 'pass':pass_index+1,
                        'model':model, 'profile':profile, 'region':region,
@@ -233,7 +238,7 @@ def run(manifest, output, profile, region, model, limit_calls):
             try:
                 response = provider.review(ReviewRequest(model, manifest['system'], batch['prompt'], images, 2400))
                 receipt.update(response_text=response.text, audit=response.audit)
-                agreement.parse_review(response.text, len(batch['case_ids']))
+                protocol.parse_review(response.text, len(batch['case_ids']))
                 receipt['status'] = 'ok'
             except Exception as exc:
                 receipt.update(status='error', error_type=type(exc).__name__)
@@ -245,7 +250,7 @@ def run(manifest, output, profile, region, model, limit_calls):
             write_json(path, receipt)
             completed += 1
             print(f"{batch['batch_id']} pass {pass_index+1}: {receipt['status']}", flush=True)
-    return collect(manifest, output)
+    return collect(manifest, output, protocol)
 
 
 def main():
@@ -253,15 +258,17 @@ def main():
     parser.add_argument('--receipts', type=Path, nargs='+', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--scene-indices', type=int, nargs='+', default=[0, 1])
+    parser.add_argument('--review-kind', choices=['objects', 'materials'], default='objects')
     parser.add_argument('--invoke-bedrock', action='store_true', help='Invoke up to two image reviews per batch')
     parser.add_argument('--profile', default='default')
     parser.add_argument('--region', default='us-west-2')
     parser.add_argument('--model', default=PRIMARY_MODEL)
     parser.add_argument('--limit-calls', type=int, default=64)
     args = parser.parse_args()
-    manifest = prepare(args.receipts, args.output, args.scene_indices)
-    result = (run(manifest, args.output, args.profile, args.region, args.model, args.limit_calls)
-              if args.invoke_bedrock else collect(manifest, args.output))
+    protocol = agreement if args.review_kind == 'objects' else material_agreement
+    manifest = prepare(args.receipts, args.output, args.scene_indices, protocol)
+    result = (run(manifest, args.output, args.profile, args.region, args.model, args.limit_calls, protocol)
+              if args.invoke_bedrock else collect(manifest, args.output, protocol))
     print(json.dumps(result, indent=2))
 
 

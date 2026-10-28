@@ -7,6 +7,7 @@ from PIL import Image
 import pytest
 
 from rgb.vlm_providers import PRIMARY_MODEL, ReviewResponse
+from rgb import material_agreement
 
 
 spec = importlib.util.spec_from_file_location(
@@ -120,3 +121,31 @@ def test_passes_use_identical_images_without_previous_response_and_unique_consen
         assert result['per_pass'][0][model]['joint_confirmed'] == 1
         assert result['per_pass'][1][model]['joint_confirmed'] == 1
         assert result['per_scene']['0'][model]['joint_confirmed'] == 1
+
+
+def test_material_mode_preserves_image_evidence_and_rejects_cross_protocol_resume(tmp_path, monkeypatch):
+    receipts = inputs(tmp_path)
+    objects = runner.prepare(receipts, tmp_path/'objects', [0])
+    materials = runner.prepare(receipts, tmp_path/'materials', [0], material_agreement)
+    assert [row['sha256'] for row in objects['batches'][0]['images']] == [
+        row['sha256'] for row in materials['batches'][0]['images']]
+    assert objects['batches'][0]['prompt'] != materials['batches'][0]['prompt']
+    with pytest.raises(ValueError, match='protocol changed'):
+        runner.prepare(receipts, tmp_path/'objects', [0], material_agreement)
+
+    class Reviewer:
+        def __init__(self, **kwargs):
+            pass
+
+        def review(self, request):
+            return ReviewResponse(json.dumps({'boxes':[{
+                'box_id':0, 'materials':[{'label':'fabric', 'evidence':'Visible textile weave.'}],
+                'dominant_material':'fabric', 'material_assessment':'clear',
+                'reason':'Fabric dominates the visible target.'}]}))
+
+    monkeypatch.setattr(runner, 'BedrockProvider', Reviewer)
+    result = runner.run(materials, tmp_path/'materials', 'default', 'us-west-2', PRIMARY_MODEL, 64,
+                        material_agreement)
+    assert result['review_kind'] == 'materials'
+    assert result['target_dominant_consensus'] == 1
+    assert result['calls_recorded'] == 2

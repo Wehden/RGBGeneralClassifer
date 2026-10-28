@@ -147,6 +147,10 @@ vocabulary. This is insufficient to rank the material encoders; their
 [labeled MINC pilot](local-vision-volume-benchmarks.md#material-execution-and-labeled-pilot)
 remains the quantitative comparison.
 
+The subsequent [dedicated material-agreement experiment](material-agreement-benchmark.md)
+reviews the same crops with a material-focused prompt and compares all three
+SigLIP2 encoders. It reports its separate reference coverage and schema failures.
+
 Large is the strongest candidate in the combined agreement table. A broader
 set of scenes with human-checked labels and boxes is needed to validate that
 advantage and the Nova reviewer, especially for small objects. The runner

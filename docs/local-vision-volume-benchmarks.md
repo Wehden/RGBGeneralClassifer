@@ -5,6 +5,11 @@ This executes the first comparisons in
 [the research proposal](local-vision-volume-research.md). It is a pilot,
 with separate execution, recognition-quality and physical-accuracy results.
 
+The subsequent [blinded two-pass Nova 2 Lite comparison](box-agreement-benchmark.md)
+evaluates agreement with the detector labels and bounding boxes. Use that
+quality result for the initial detector comparison; the timings below
+establish execution feasibility.
+
 ## Decisions supported by this run
 
 YOLOE26 large/640 is a practical candidate for a slower recognition loop.

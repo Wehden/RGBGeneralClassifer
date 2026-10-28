@@ -70,6 +70,8 @@ on retained RGB captures plus disjoint annotated MINC controls. See the
 [repeatable training process](docs/material-distillation-process.md) and
 [measured results](docs/material-distillation-results.md). The exported
 student is selectable with `--materials-model-dir`.
+The [per-box comparison view](docs/model-comparison.md) displays object
+confidence and material scores on the same retained RGB frame and boxes.
 
 The retained board deployment is an Arduino Uno Q system for work with Seattle
 University students. The Portenta X8 prototype is retained for cooling experiments. The current trial uses YOLOE-26n prompt-free ONNX with 4,585 class names. The retained first version uses EfficientDet-Lite0 COCO. Materials mode uses a separate 12-label prompted YOLOE graph. The board draws live bounding

@@ -205,6 +205,10 @@ exists, that deployed model becomes the local default. An explicit material
 model directory overrides it; without the deployed alias, base/224 remains
 the default.
 
+The [per-box comparison panel](model-comparison.md) pairs YOLOE's original
+object confidence and SigLIP2's material score on one retained RGB snapshot.
+It remains available while capture is paused.
+
 | Claim | Verification |
 |---|---|
 | Small/medium artifacts and class mappings are verified before inference | Checksum validation and recorded manifests |

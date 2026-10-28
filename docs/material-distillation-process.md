@@ -199,9 +199,25 @@ test ! -e "$student_dir" && cp -a "$run_dir/output/artifacts/fine-tuned" "$stude
 rgb-console -- --materials-model-dir "$student_dir"
 ```
 
+To make a verified model the default on this machine, point
+`~/.cache/bolt-rgb/models/siglip2-material-student-384` at that versioned
+artifact directory. The local runner selects this deployed alias when its
+manifest exists, otherwise the original base/224 model. Explicit
+`--materials-model-dir` and `RGB_MATERIALS_MODEL_DIR` selections take precedence.
+
+For a first deployment when the alias does not yet exist:
+
+```bash
+ln -s "$student_dir" "$HOME/.cache/bolt-rgb/models/siglip2-material-student-384"
+```
+
 Runner options configure a newly started service. If the console attaches
 to an existing service, restart that service with the material-model option
 to select the new artifact. Use `--no-vlm` for local-only operation.
+Restart the owning console after changing the alias. Saved capture/VLM settings
+remain in the existing archive. To roll back, explicitly select
+`--materials-model-dir "$HOME/.cache/bolt-rgb/models/siglip2-base-224"`, or
+remove the deployment symlink before restarting.
 
 An accepted material needs a qualified threshold, enough training examples,
 and a non-rejection class. The learned head has its own score and policy;

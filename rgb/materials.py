@@ -8,6 +8,15 @@ import numpy as np
 from PIL import Image
 
 
+def material_directory(directory=None):
+    """Explicit selection, deployed student, then the original local model."""
+    if directory:
+        return Path(directory).expanduser()
+    models=Path.home()/'.cache/bolt-rgb/models'
+    deployed=models/'siglip2-material-student-384'
+    return deployed if (deployed/'manifest.json').is_file() else models/'siglip2-base-224'
+
+
 def prepare(rgb, manifest):
     processor=manifest['processor']
     if (processor.get('do_center_crop') or processor.get('resample') not in {2,3}

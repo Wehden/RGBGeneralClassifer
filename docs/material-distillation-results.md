@@ -215,6 +215,12 @@ rgb-console -- --materials-model-dir \
 ```
 
 An attaching console uses the already-running service's model configuration.
+The model was subsequently deployed as the console's persistent default through
+the `siglip2-material-student-384` cache symlink. The owning Qt console was
+restarted, and live Femto Bolt crop readings matched the fine-tuned manifest
+and learned-score policy. Capture remained paused. Deployment receipts are
+under the private run directory's `deployment/` folder.
+
 The application supports both original and learned-head artifacts, retains
 crop evidence and head/data provenance, and displays the appropriate score
 type in Live and Records. Arrow/Parquet JSON fields preserve the full learned

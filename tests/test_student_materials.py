@@ -1,6 +1,24 @@
 import numpy as np
 
-from rgb.materials import rank_student
+from pathlib import Path
+
+from rgb.materials import material_directory, rank_student
+
+
+def test_deployed_student_is_the_default_and_explicit_selection_wins(tmp_path,monkeypatch):
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    models=tmp_path/'.cache/bolt-rgb/models'
+    assert material_directory()==models/'siglip2-base-224'
+    version=models/'student-test-version'
+    version.mkdir(parents=True)
+    (version/'manifest.json').write_text('{}')
+    deployed=models/'siglip2-material-student-384'
+    deployed.symlink_to(version,target_is_directory=True)
+    assert material_directory()==deployed
+    override=tmp_path/'custom-material-model'
+    assert material_directory(str(override))==override
+    deployed.unlink()
+    assert material_directory()==models/'siglip2-base-224'
 
 
 def manifest():

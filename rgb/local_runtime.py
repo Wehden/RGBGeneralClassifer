@@ -73,7 +73,8 @@ class LocalRuntime:
         self.detector_backend=detector_backend
         self.detector_device=detector_device
         self.detector_threads=detector_threads
-        self.material_dir=Path(material_dir).expanduser() if material_dir else Path.home()/'.cache/bolt-rgb/models/siglip2-base-224'
+        from rgb.materials import material_directory
+        self.material_dir=material_directory(material_dir)
         self.material_device=material_device
         self.local_materials=local_materials
         self.material_condition=threading.Condition()

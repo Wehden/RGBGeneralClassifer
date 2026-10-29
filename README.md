@@ -154,3 +154,9 @@ uncapped capture settings, rollback and 9B VLM pool integration.
 
 See [portable networking and capture controls](docs/portable-networking.md) and
 [materials mode and measured outputs](docs/materials-mode.md).
+
+## Model weight transport
+
+Use the [private model release tooling](docs/model-weights.md) to publish verified
+material student exports from ventunoq and fetch a commit-pinned release onto
+Stepwise. The running console continues to use local model files offline.

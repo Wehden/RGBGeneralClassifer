@@ -1,5 +1,6 @@
 """Independent detector, local-material and archive loops with serialized VLM review."""
 import hashlib
+import copy
 import io
 import json
 import math
@@ -16,7 +17,7 @@ from PIL import Image
 
 from board.tracking import Tracker
 from common.geometry import bounds, iou
-from rgb.camera import CameraUnavailable, depth_summary, jpg, png
+from rgb.camera import CameraUnavailable, FrameExpired, depth_summary, jpg, png
 from rgb.enrichment import SCHEMA, validate_readings
 from rgb.local_store import encode
 from rgb.store import detection_id, now
@@ -81,6 +82,9 @@ class LocalRuntime:
         self.material_pending=None
         self.material_cache={}
         self.material_inputs=OrderedDict()
+        self.material_comparison=None
+        self.material_comparison_images=OrderedDict()
+        self.material_context=None
         self.material_lock=threading.RLock()
         self.material_status={'state':'starting' if local_materials else 'disabled',
                               'interval_s':1,'max_crops_per_pass':4,'score_type':'uncalibrated_image_text_similarity'}
@@ -138,7 +142,11 @@ class LocalRuntime:
                 if tracking_context!=context:
                     tracker=Tracker(continuous=True);tracking_context=context
                     with self.readings_lock:self.live_readings.clear()
-                    with self.material_lock:self.material_cache.clear()
+                    with self.material_lock:
+                        self.material_cache.clear()
+                        self.material_context=context
+                        self.material_comparison=None
+                        self.material_comparison_images.clear()
                 settings=self.store.settings();model.threshold=settings['detector_threshold']
                 detections,milliseconds=model.detect(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR))
                 tracker.update(detections,frame.metadata['received_monotonic_s'])
@@ -151,10 +159,6 @@ class LocalRuntime:
                 with self.material_lock:
                     present={d['track_id'] for d in detections}
                     self.material_cache={key:item for key,item in self.material_cache.items() if key in present}
-                if self.local_materials:
-                    with self.material_condition:
-                        self.material_pending=(frame,[dict(d) for d in detections])
-                        self.material_condition.notify_all()
                 with self.readings_lock:
                     present={d['track_id'] for d in detections}
                     self.live_readings={key:item for key,item in self.live_readings.items() if key in present}
@@ -162,6 +166,10 @@ class LocalRuntime:
                         'detections':detections,'detector_ms':milliseconds,
                         'detector':{'model':self.model_manifest['model'],'sha256':model.sha256,'threshold':model.threshold,
                                     'settings_version':settings['version'],'config':{**model.config,'depth_basis':'box_roi'}}}
+                if self.local_materials:
+                    with self.material_condition:
+                        self.material_pending=(frame,[dict(d) for d in detections],copy.deepcopy(result['detector']))
+                        self.material_condition.notify_all()
                 with self.camera.condition:
                     self.camera.latest_detection=(frame,result)
                     self.camera.detector_status.update(state='running',error=None,detector_ms=milliseconds,frame_id=frame.id,count=len(detections))
@@ -183,13 +191,18 @@ class LocalRuntime:
                 or not 0<=age<=5 or overlap<.7):return
         detection['local_material']={**cached['reading'],'match_age_s':round(age,3),'match_iou':overlap}
 
-    def _material_pass(self,classifier,frame,detections):
+    def _material_pass(self,classifier,frame,detections,detector=None):
         if time.monotonic()-frame.metadata['received_monotonic_s']>self.camera.freshness_s:return
+        context=(frame.metadata['session_id'],tuple(frame.color_rgb.shape),frame.metadata['calibration_sha256'])
         with self.material_lock:
+            if self.material_context is not None and self.material_context!=context:return
             ordered=sorted(detections,key=lambda d:self.material_cache.get(d['track_id'],{}).get('received_monotonic_s',0))
             candidates=[d for d in ordered if not self.material_cache.get(d['track_id'])
                         or time.monotonic()-self.material_cache[d['track_id']]['received_monotonic_s']>=2]
         count=0
+        comparison_rows=[]
+        detector=detector or {'model':(self.model_manifest or {}).get('model','YOLOE'),
+                             'sha256':(self.model_manifest or {}).get('sha256')}
         for detection in candidates:
             # Skipped crops must not consume slots or starve eligible tracks.
             if count>=4 or self.stop_event.is_set():break
@@ -205,6 +218,17 @@ class LocalRuntime:
                            calibration_sha256=frame.metadata['calibration_sha256'],
                            source_box=detection['box'],crop_bounds_xyxy=[x1,y1,x2,y2],
                            crop_sha256=digest,observed_at=frame.metadata['received_at'])
+            paired_object={'label':detection['label'],'confidence':detection['confidence'],
+                           'class_id':detection['class_id'],'box':list(detection['box']),
+                           'source_frame_id':frame.id,'model':detector['model'],
+                           'artifact_sha256':detector.get('sha256')}
+            reading['paired_object']=paired_object
+            comparison_rows.append({'box_index':next(i for i,d in enumerate(detections) if d is detection),
+                'track_id':detection['track_id'],'box':list(detection['box']),
+                'crop_bounds_xyxy':[x1,y1,x2,y2],'crop_sha256':digest,'object':paired_object,
+                'material':{key:copy.deepcopy(reading.get(key)) for key in
+                    ['status','label','best_candidate','score','similarity','margin','score_type',
+                     'candidates','policy','model','manifest_sha256','source_frame_id','source_box']}})
             with self.material_lock:
                 self.material_cache[detection['track_id']]={'reading':reading,'source_box':detection['box'],
                     'session_id':frame.metadata['session_id'],'calibration_sha256':frame.metadata['calibration_sha256'],
@@ -217,6 +241,42 @@ class LocalRuntime:
             self.material_status.update(state='running',inference_ms=reading['inference_ms'],
                                         last_frame_id=frame.id,last_result=reading['status'],crops_in_pass=count)
             self.material_status.pop('error',None)
+        if comparison_rows:
+            preview,size=resize_jpeg(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR),768)
+            snapshot={'frame_id':frame.id,'session_id':frame.metadata['session_id'],
+                'observed_at':frame.metadata['received_at'],
+                'calibration_sha256':frame.metadata['calibration_sha256'],
+                'received_monotonic_s':frame.metadata['received_monotonic_s'],
+                'detector':detector,'pairing':'exact_frame_and_box','same_task':False,
+                'image_size':size,'image_sha256':hashlib.sha256(preview).hexdigest(),
+                'image_url':'/api/camera/comparison/image.jpg?frame_id='+frame.id,
+                'total_boxes':len(detections),'rows':comparison_rows}
+            with self.material_lock:
+                # A pass completing after a camera/session reset must not
+                # publish its old frame into the new session's comparison.
+                if (self.camera.session_id!=frame.metadata['session_id']
+                        or self.material_context is not None and self.material_context!=context):return
+                self.material_comparison=snapshot
+                self.material_comparison_images[frame.id]=(preview,{key:snapshot[key] for key in
+                    ['frame_id','session_id','observed_at','calibration_sha256','image_sha256']})
+                while len(self.material_comparison_images)>2:
+                    self.material_comparison_images.popitem(last=False)
+
+    def comparison(self):
+        with self.material_lock:snapshot=copy.deepcopy(self.material_comparison)
+        if (snapshot is None or snapshot['session_id']!=self.camera.session_id
+                or self.camera.calibration_hash and snapshot['calibration_sha256']!=self.camera.calibration_hash):
+            return {'status':self.material_status['state'],'rows':[]}
+        age=max(0,time.monotonic()-snapshot.pop('received_monotonic_s'))
+        snapshot.update(status='stale' if age>5 else 'complete',age_s=round(age,2))
+        return snapshot
+
+    def comparison_image(self,frame_id):
+        with self.material_lock:image=self.material_comparison_images.get(frame_id)
+        if (image is None or image[1]['session_id']!=self.camera.session_id
+                or self.camera.calibration_hash and image[1]['calibration_sha256']!=self.camera.calibration_hash):
+            raise FrameExpired('Scored snapshot image has expired')
+        return image
 
     def _materials(self):
         try:

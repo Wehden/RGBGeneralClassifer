@@ -5,7 +5,10 @@ let archiveLoaded=false;
 const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
   new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
 const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
+const comparisonViewer = window.RGBComparison && $('model-comparison') ?
+  new window.RGBComparison.Viewer($('model-comparison'),$('comparison-content'),$('comparison-status')) : null;
 window.addEventListener('pagehide', () => liveVideo.stop());
+window.addEventListener('pagehide', () => comparisonViewer?.stop());
 window.addEventListener('pageshow', event => { if (event.persisted) live(); });
 function element(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
 async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(`Request failed (${r.status})`); return r.json(); }
@@ -52,6 +55,7 @@ async function status() {
 }
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
+  comparisonViewer?.select(Boolean(s.local));
   const channel = s.local ? $('camera-channel')?.value ?? 'color' : 'color';
   syncViewIcons();
   const cloud=s.local&&channel==='pointcloud';
@@ -109,6 +113,10 @@ async function show(id, refresh=false) {
           ? `learned score ${m.score.toFixed(3)} · score margin ${m.margin.toFixed(3)} · appearance estimate`
           : `similarity ${m.similarity.toFixed(3)} · margin ${m.margin.toFixed(3)} · uncalibrated`;
         card.append(element('p',`Local material: ${m.status==='identified'?m.label:'uncertain'} · best visual match ${m.best_candidate} · ${score}`,'comparison'));
+        if(m.paired_object){
+          const p=m.paired_object;
+          card.append(element('p',`YOLOE on this source box: ${p.label} · detection confidence ${(p.confidence*100).toFixed(1)}%`,'comparison'));
+        }
         if(m.crop_asset){const crop=element('details');crop.append(element('summary','Material classifier crop'));const img=element('img');img.src=`/api/events/${id}/assets/material_crop_${i}`;img.alt='RGB crop used by SigLIP2';img.className='sensor-preview';crop.append(img,element('p',`Read from frame ${m.source_frame_id} · ${m.model}`,'muted'));card.append(crop);}
       }
       if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));

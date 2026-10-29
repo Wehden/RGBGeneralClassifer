@@ -42,6 +42,8 @@ class CameraAPI:
         app.add_url_rule('/api/camera/frame','camera_frame',self.bundle)
         app.add_url_rule('/api/camera/pointcloud','camera_pointcloud',self.pointcloud)
         app.add_url_rule('/api/camera/detections','camera_detections',self.detections)
+        app.add_url_rule('/api/camera/comparison','camera_comparison',self.comparison)
+        app.add_url_rule('/api/camera/comparison/image.jpg','camera_comparison_image',self.comparison_image)
         app.add_url_rule('/api/camera/observations','camera_observe',self.observe,methods=['POST'])
         app.add_url_rule('/api/events/<event_id>/assets/<name>','observation_asset',self.asset)
         app.add_url_rule('/api/review/evidence','evidence_export',self.evidence)
@@ -111,6 +113,22 @@ class CameraAPI:
         if not latest:return jsonify(status='pending',frame_id=frame.id),202
         return jsonify(**latest[1],camera_frame_id=self.camera.status()['frame_id'],
                        camera_session_id=self.camera.session_id,status='complete')
+
+    def comparison(self):
+        response=jsonify(self.runtime.comparison())
+        response.headers['Cache-Control']='no-store'
+        return response
+
+    def comparison_image(self):
+        try:frame_id=str(UUID(request.args.get('frame_id','')))
+        except ValueError:return jsonify(error='Expected UUID frame_id'),400
+        image,metadata=self.runtime.comparison_image(frame_id)
+        response=Response(image,mimetype='image/jpeg')
+        response.headers.update({'Cache-Control':'no-store','X-RGB-Frame-ID':frame_id,
+            'X-RGB-Session-ID':metadata['session_id'],'X-RGB-Received-At':metadata['observed_at'],
+            'X-RGB-Calibration-SHA256':metadata['calibration_sha256'],
+            'X-RGB-Image-SHA256':metadata['image_sha256']})
+        return response
 
     def stream_response(self,channel,overlay=False):
         if channel not in {'color','depth','ir'}:return 'Not found',404

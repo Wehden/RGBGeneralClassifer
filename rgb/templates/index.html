@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RGB Console</title><link rel="stylesheet" href="/static/style.css">{% if local %}<script src="/static/pointcloud.js" defer></script>{% endif %}<script src="/static/live-video.js" defer></script><script src="/static/app.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RGB Console</title><link rel="stylesheet" href="/static/style.css">{% if local %}<script src="/static/pointcloud.js" defer></script><script src="/static/comparison.js" defer></script>{% endif %}<script src="/static/live-video.js" defer></script><script src="/static/app.js" defer></script></head>
 <body>
 <header><a href="/" class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>rgb-console</a><nav aria-label="Main"><a href="/" aria-current="page">Live</a><a href="/records">Records</a></nav></header>
 <main>
@@ -25,6 +25,12 @@
 <section class="history panel"><div class="panelhead"><h2>Captures</h2><button id="refresh">Refresh</button></div><p id="archive-status" role="status"></p><div id="events"></div><button id="older">Older</button></section>
 <section class="detail panel"><div class="panelhead"><h2>Review</h2><span class="section-dot" aria-hidden="true"></span></div><div id="detail"><p class="muted">Select a capture.</p></div></section>
 </div>
+{% if local %}<details id="model-comparison" class="panel model-comparison" open>
+<summary>Per-box model comparison</summary>
+<p class="muted">One scored RGB snapshot. YOLOE identifies objects; SigLIP2 estimates materials. Their scores measure different tasks.</p>
+<p id="comparison-status" role="status">Waiting for scored boxes…</p>
+<div id="comparison-content"></div>
+</details>{% endif %}
 <details class="settings panel"><summary>Settings &amp; exports</summary><div class="settings-grid">
 <section><h3>Thresholds</h3><div class="thresholds"><label>Detector<output id="detector-value">0.45</output><input id="detector-threshold" aria-label="Classifier confidence threshold" type="range" min="0.05" max="0.99" step="0.01" value="0.45"></label><label>VLM<output id="vlm-value">0.65</output><input id="vlm-threshold" aria-label="VLM confidence threshold" type="range" min="0.05" max="0.99" step="0.01" value="0.65"></label><button id="save-settings">Apply</button><span id="settings-status" role="status"></span></div></section>
 <section><h3>Downloads</h3><div class="download-list">{% if local %}<a id="snapshot-link" href="/api/camera/color/snapshot.jpg">Snapshot</a><a id="raw-link" href="/api/camera/depth/raw.png" hidden>Raw depth</a><a href="/api/camera/frame">Frame bundle</a><a id="calibration-link" href="/api/camera/calibration">Calibration</a>{% endif %}<a href="/api/review/export/parquet">Parquet</a><a href="/api/review/export/arrow">Arrow</a></div><h3>Models</h3><p class="muted" id="detector-model">Connecting…</p><p class="muted" id="vlm-model"></p>{% if local %}<p class="muted">Local materials: SigLIP2 reads RGB object crops. Scores describe visual appearance, not verified composition; ambiguous matches remain uncertain.</p>{% endif %}</section>

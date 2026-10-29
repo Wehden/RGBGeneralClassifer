@@ -182,6 +182,10 @@ plane. Begin with a matte cuboid/cylinder at 0.6–1.0 m, independently measured
 dimensions, repeated placements and visible table. Arbitrary-object volume
 still requires additional views or declared shape/closure assumptions.
 
+The subsequent [current-capture experiment](capture-range-volume-experiment.md)
+reports full observed range and conditional cup/bottle cylinder envelopes,
+including mask sensitivity and rejection of unsupported estimates.
+
 ## Combined live pilot
 
 The existing `LocalRuntime` workers were exercised with camera capture,

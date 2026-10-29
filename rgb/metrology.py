@@ -5,6 +5,10 @@ import cv2
 import numpy as np
 
 
+class UnsupportedPlane(ValueError):
+    """Valid points do not provide enough coherent support for a plane."""
+
+
 def camera_matrix(plane, shape):
     intrinsic = plane['intrinsics']
     h, w = shape
@@ -46,10 +50,11 @@ def backproject(depth, plane, scale_mm, min_range=.5, max_range=3.86):
     return points, pixels
 
 
-def native_mask_points(depth, metadata, masks):
+def native_mask_points(depth, metadata, masks, *, min_range=.5, max_range=3.86):
     """Select native-camera points with RGB masks, retaining factory transform diagnostics."""
     planes = metadata['calibration']['planes']
-    points, pixels = backproject(depth, planes['depth'], metadata['depth_scale_mm'])
+    points, pixels = backproject(depth, planes['depth'], metadata['depth_scale_mm'],
+                                min_range=min_range, max_range=max_range)
     color_shape = (planes['color']['intrinsics']['height'], planes['color']['intrinsics']['width'])
     if any(mask.shape != color_shape or mask.dtype != np.bool_ for mask in masks):
         raise ValueError('RGB mask dimensions or dtype mismatch')
@@ -64,6 +69,7 @@ def native_mask_points(depth, metadata, masks):
         'rotation_determinant': float(np.linalg.det(rotation)),
         'coordinate_frame': 'native_depth_camera', 'units': 'metres',
         'independent_valid_depth_samples': len(points),
+        'selection_range_m': [min_range, max_range],
     }
     if diagnostics['rotation_orthogonality_error'] > .001:
         diagnostics['calibration_warning'] = 'Factory rotation is not orthonormal; RGB mask projection requires qualification'
@@ -110,7 +116,7 @@ def fit_plane(points, threshold_m=.008, trials=100, seed=20261028):
         if inliers.sum() > best.sum():
             best = inliers
     if best.sum() < 30:
-        raise ValueError('No supported plane found')
+        raise UnsupportedPlane('No supported plane found')
     center = sample[best].mean(axis=0)
     _, _, vectors = np.linalg.svd(sample[best]-center, full_matrices=False)
     normal = vectors[-1]

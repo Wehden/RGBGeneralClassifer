@@ -12,6 +12,13 @@ Both recognition stages consume **RGB**. Depth supplies box distance
 summaries and the point cloud. IR remains available through views and the
 camera API.
 
+The October 28 [larger-model and volume research](local-vision-volume-research.md)
+proposes paired detector/material benchmarks, use of the existing segmentation
+outputs, and qualification of depth measurements against physical references.
+The [first benchmark pilot](local-vision-volume-benchmarks.md) records larger-model
+latency, a labeled material comparison, mask parity and native-depth SDK parity.
+Physical volume accuracy remains unmeasured.
+
 ## Install once; run offline
 
 The export environment is separate from the service. PyTorch, Transformers,

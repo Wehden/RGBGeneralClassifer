@@ -146,7 +146,7 @@ def metrics(logits,rows,split,temperature=1,threshold=1,margin=.05):
         ids=[i for i,row in enumerate(rows) if row['split']==split and row['source_kind']==kind]
         labeled=[i for i in ids if rows[i]['target']>=0]
         target=[i for i in labeled if rows[i]['material'] not in REJECTIONS]
-        accepted_ref=[i for i in target if accepted[i]]
+        accepted_ref=[i for i in labeled if accepted[i]]
         correct=sum(top[i]==rows[i]['target'] for i in target)
         result[kind]={'examples':len(ids),'labeled_targets':len(target),
                       'correct_top1':int(correct),'top1_agreement':correct/len(target) if target else None,

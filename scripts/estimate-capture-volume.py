@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from board.yoloe import Detector, prepare
 from rgb.capture_metrology import observed_range, upright_cylinder, visible_envelope
 from rgb.instance_masks import instances
-from rgb.metrology import backproject, fit_plane, native_mask_points
+from rgb.metrology import UnsupportedPlane, backproject, fit_plane, native_mask_points
 
 
 def analyse(path, model, output):
@@ -49,12 +49,18 @@ def analyse(path, model, output):
                                min_range=0, max_range=maximum)
     radial = np.linalg.norm(all_points, axis=1)
     gravity = None
-    for detection, cloud in zip(detections, clouds):
+    plane_rejections = []
+    for index, (detection, cloud) in enumerate(zip(detections, clouds)):
         operating = range_report.get('mode_operating_range')
         if operating:
             cloud = cloud[(cloud[:, 2] >= operating['min_m']) & (cloud[:, 2] <= operating['max_m'])]
         if detection['label'] == 'ceiling' and len(cloud) >= 100:
-            candidate = fit_plane(cloud, threshold_m=.01)
+            try:
+                candidate = fit_plane(cloud, threshold_m=.01)
+            except UnsupportedPlane:
+                plane_rejections.append({'detection_index': index, 'samples': len(cloud),
+                                         'reason': 'no_supported_plane'})
+                continue
             if candidate['inlier_fraction'] >= .8 and candidate['inlier_residual_p95_m'] <= .02:
                 gravity = {**candidate, 'assumption': 'detected ceiling is horizontal; its normal supplies vertical',
                            'samples': len(cloud), 'operating_range_filter_applied': operating is not None,
@@ -93,6 +99,8 @@ def analyse(path, model, output):
                 row['mask_sensitivity_l'] = [min(scenarios), max(scenarios)]
                 row['mask_sensitivity_semantics'] = 'two mask scenarios; not an uncertainty/confidence interval'
         row['volume_status'] = row.get('cylinder', {}).get('status', 'no_complete_volume_estimate')
+        if gravity is None and detection['label'] in cylindrical:
+            row['volume_status'] = 'no_vertical_reference'
         overlay[mask] = (overlay[mask].astype(float)*.8 + np.array([0, 255, 0])*.2).astype(np.uint8)
         y1, x1, y2, x2 = detection['box'];h, w = rgb.shape[:2]
         cv2.rectangle(overlay, (int(x1*w), int(y1*h)), (int(x2*w), int(y2*h)), (0, 255, 0), 1)
@@ -106,7 +114,8 @@ def analyse(path, model, output):
                'range': range_report,
                'radial_range_m': dict(zip(['min', 'p01', 'median', 'p99', 'max'],
                                         np.percentile(radial, [0, 1, 50, 99, 100]).tolist())),
-               'geometry_diagnostics': diagnostic, 'vertical_reference': gravity, 'objects': rows,
+               'geometry_diagnostics': diagnostic, 'vertical_reference': gravity,
+               'vertical_reference_rejections': plane_rejections, 'objects': rows,
                'total_object_volume': None,
                'total_volume_reason': 'incomplete/overlapping views and unsupported object closure; no defensible sum',
                'physical_accuracy': 'unverified'}

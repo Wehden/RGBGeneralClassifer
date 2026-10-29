@@ -5,6 +5,10 @@ import cv2
 import numpy as np
 
 
+class UnsupportedPlane(ValueError):
+    """Valid points do not provide enough coherent support for a plane."""
+
+
 def camera_matrix(plane, shape):
     intrinsic = plane['intrinsics']
     h, w = shape
@@ -112,7 +116,7 @@ def fit_plane(points, threshold_m=.008, trials=100, seed=20261028):
         if inliers.sum() > best.sum():
             best = inliers
     if best.sum() < 30:
-        raise ValueError('No supported plane found')
+        raise UnsupportedPlane('No supported plane found')
     center = sample[best].mean(axis=0)
     _, _, vectors = np.linalg.svd(sample[best]-center, full_matrices=False)
     normal = vectors[-1]

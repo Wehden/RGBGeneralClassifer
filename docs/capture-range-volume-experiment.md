@@ -58,6 +58,11 @@ vertical because the ceiling is assumed horizontal; this is not a measured
 gravity vector.
 Only points within the current mode's specified range contribute to this
 candidate plane; the final fits have 99.0–99.7% inliers within 10 mm.
+An unsupported ceiling plane is recorded as a rejected candidate, and the
+runner continues to any later ceiling candidate. If no vertical reference
+is supported, it still writes range, visible-envelope and annotated-image
+receipts for every frame; cylindrical labels report `no_vertical_reference`.
+Invalid geometry inputs continue to raise validation errors.
 Only explicitly supported cylindrical labels receive a cylinder closure.
 Height is measured along the candidate vertical axis, and diameter across
 the viewing direction in the horizontal plane. Each uses 2nd–98th percentile
@@ -115,9 +120,11 @@ rejection reasons and mask sensitivity. Annotated RGB images remain private.
 The original run is under
 `~/.local/state/bolt-rgb/capture-volume-2026-10-29/`.
 
-Thirteen analytic geometry/metrology tests pass, including a known cylinder
+Sixteen geometry/metrology and runner tests pass, including a known cylinder
 seen from its front half, invariance to rotation, invalid/saturated depth,
 explicit far-range selection, planar surfaces and mixed-depth rejection.
+Runner regressions verify complete batch receipts without a supported ceiling,
+recovery through a later candidate, and propagation of invalid-input errors.
 The live three-frame run exercises the complete offline runner. Source
 compilation and whitespace checks pass.
 

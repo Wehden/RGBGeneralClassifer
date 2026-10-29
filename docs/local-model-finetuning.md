@@ -50,6 +50,12 @@ classification head and labeled classification loss. Its configuration
 supports single-label and multi-label classification. We can train on
 material categories instead of using the current text-similarity ranking.
 
+The fixed-resolution checkpoints actually used here load as Transformers'
+`SiglipModel`, rather than the NaFlex `Siglip2Model`. The
+[implemented training process](material-distillation-plan.md) uses
+`AutoModel.vision_model` and the checkpoint's normalized pooled features,
+with a separately trained head. This preserves our existing export contract.
+
 The first experiment should cache the existing image encoder's features
 and train a small material head. This changes the classifier while leaving
 the encoder weights fixed. It is a frozen-feature or linear-probe baseline,

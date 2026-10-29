@@ -130,10 +130,15 @@ def test_stale_or_mismatched_material_results_are_not_attached(local,change):
     assert 'local_material' not in detection
 
 
-def test_local_material_evidence_survives_archive_queries_and_typed_exports(local):
+@pytest.mark.parametrize('student',[False,True])
+def test_local_material_evidence_survives_archive_queries_and_typed_exports(local,student):
     store,camera,frame,detected,runtime,app=local
     frame.metadata['device']={'name':'Femto Bolt'}
     detection,_=material_detection(local)
+    if student:
+        detection['local_material'].update(score=.94,margin=.8,score_type='supervised_material_head_score',
+            classifier={'temperature':2,'minimum_probability':.775,'qualified_for_acceptance':True},
+            training={'variant':'fine-tuned','dataset_sha256':'e'*64})
     event=runtime.archive(frame,{**detected,'detections':[detection]})
     reading=event['detections'][0]['local_material']
     assert reading['crop_asset']['sha256']==reading['crop_sha256']
@@ -156,6 +161,10 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
         rows=pq.read_table(pa.BufferReader(archive.read('material_readings.parquet'))).to_pylist()
         assert rows[0]['provider']=='siglip2' and rows[0]['confidence'] is None
         assert rows[0]['similarity']==.38 and rows[0]['accepted'] is True
+        assert json.loads(rows[0]['value_json'])==reading
+        if student:
+            assert rows[0]['reason']=='Learned material appearance score'
+            assert json.loads(rows[0]['value_json'])['score']==.94
         detections=pq.read_table(pa.BufferReader(archive.read('detections.parquet'))).to_pylist()
         assert json.loads(detections[0]['local_material_json'])==reading
     response.close()

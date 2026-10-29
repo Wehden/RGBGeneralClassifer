@@ -297,6 +297,21 @@ test('empty local archive explains capture pause and preserves archive errors',a
   assert.match(node('archive-status').textContent,/Archive unavailable.*503/);
 });
 
+test('trained material readings show the learned score without presenting it as a probability',async()=>{
+  const {context,node}=setup();
+  const event={analysis:{status:'not_analyzed'},detections:[{
+    detection_id:'box',box:[0,0,1,1],display_label:'plastic',label:'bottle',
+    local_material:{status:'identified',label:'plastic',best_candidate:'plastic',
+      similarity:.11,score:.94,margin:.8,score_type:'supervised_material_head_score'},
+    review_context:{}}],
+    opinions:[],detector:{model:'yoloe-26s'},settings:{display_mode:'materials'},event_id:'scene'};
+  context.fetch=async()=>json(event);
+  await context.show('scene');
+  const card=node('detail').children.find(c=>c.className==='reading');
+  assert.match(card.children[2].textContent,/learned score 0.940.*score margin 0.800.*appearance estimate/);
+  assert.doesNotMatch(card.children[2].textContent,/similarity|%|probability/);
+});
+
 test('individual VLM request refreshes a terminal detail and restarts polling',async()=>{
   const {context,node}=setup();let gets=0,timers=0;
   context.setTimeout=()=>{timers++;return 1;};

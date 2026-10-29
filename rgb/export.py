@@ -71,7 +71,9 @@ def rows(store,table,stops,settings,projections):
                             yield dict(provider='siglip2',detection_id=d['detection_id'],track_id=d.get('track_id'),
                                        observation_id=event['event_id'],source_id=event['source_id'],
                                        observed_at=timestamp(event['observed_at']),material_index=0,label=local['label'],
-                                       confidence=None,reason='Visual similarity; uncalibrated material identification',
+                                       confidence=None,reason=('Learned material appearance score'
+                                           if local.get('score_type')=='supervised_material_head_score'
+                                           else 'Visual similarity; uncalibrated material identification'),
                                        accepted=local['status']=='identified',model=local['model'],attempt_id=None,
                                        **{key:local.get(key) for key in ['status','best_candidate','similarity','margin','score_type','source_frame_id','crop_sha256']},
                                        value_json=json.dumps(local,sort_keys=True))

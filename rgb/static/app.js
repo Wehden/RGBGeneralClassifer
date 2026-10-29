@@ -105,7 +105,10 @@ async function show(id, refresh=false) {
       card.append(element('h3',`${i+1}. ${d.display_label}`),element('p',`${d.label_provider === 'siglip2' ? 'SigLIP2' : d.label_provider === 'detector' ? event.detector.model : c?.model ?? 'VLM'}${d.display_confidence == null ? '' : ' · '+(d.display_confidence*100).toFixed(1)+'%'}`,'muted'));
       if(d.local_material) {
         const m=d.local_material;
-        card.append(element('p',`Local material: ${m.status==='identified'?m.label:'uncertain'} · best visual match ${m.best_candidate} · similarity ${m.similarity.toFixed(3)} · margin ${m.margin.toFixed(3)} · uncalibrated`,'comparison'));
+        const score=m.score_type==='supervised_material_head_score'
+          ? `learned score ${m.score.toFixed(3)} · score margin ${m.margin.toFixed(3)} · appearance estimate`
+          : `similarity ${m.similarity.toFixed(3)} · margin ${m.margin.toFixed(3)} · uncalibrated`;
+        card.append(element('p',`Local material: ${m.status==='identified'?m.label:'uncertain'} · best visual match ${m.best_candidate} · ${score}`,'comparison'));
         if(m.crop_asset){const crop=element('details');crop.append(element('summary','Material classifier crop'));const img=element('img');img.src=`/api/events/${id}/assets/material_crop_${i}`;img.alt='RGB crop used by SigLIP2';img.className='sensor-preview';crop.append(img,element('p',`Read from frame ${m.source_frame_id} · ${m.model}`,'muted'));card.append(crop);}
       }
       if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));

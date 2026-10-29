@@ -18,6 +18,8 @@ test('records keep camera names and distinguish local similarity from VLM confid
       local_material:{status:'uncertain',label:null,similarity:.321},
       materials:[{label:'metal',confidence:.8}]},
     {...base,local_material:{status:'identified',label:'plastic',similarity:.38}},
+    {...base,local_material:{status:'identified',label:'glass',similarity:.12,
+      score:.93,score_type:'supervised_material_head_score'}},
   ];
   const context=vm.createContext({
     document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},
@@ -29,11 +31,12 @@ test('records keep camera names and distinguish local similarity from VLM confid
   vm.runInContext(fs.readFileSync('rgb/static/records.js','utf8'),context);
   await new Promise(setImmediate);
   const rows=nodes.get('rows').children;
-  assert.equal(rows.length,2);
+  assert.equal(rows.length,3);
   assert.equal(rows[0].children[1].textContent,'Femto Bolt · Desk');
   assert.equal(rows[0].children[4].textContent,
     'Local: uncertain · similarity 0.321 (uncalibrated) / VLM: metal 80.0%');
   assert.equal(rows[1].children[1].textContent,'Attached camera');
   assert.equal(rows[1].children[4].textContent,'Local: plastic · similarity 0.380 (uncalibrated)');
+  assert.equal(rows[2].children[4].textContent,'Local: glass · learned score 0.930 (appearance estimate)');
   assert.equal(rows[0].children[6].children[0].href,'/#event/scene');
 });

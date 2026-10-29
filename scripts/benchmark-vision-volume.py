@@ -142,14 +142,15 @@ def detector_worker(directory, frames, output, samples, threads):
     for index in range(5):
         infer(model, bgrs[index % len(bgrs)])
     total = []; inference = []; saved = []
-    for index in range(samples):
+    for index in range(max(samples, len(bundles))):
         start = time.perf_counter()
         readings, outputs, ms = infer(model, bgrs[index % len(bgrs)])
-        total.append((time.perf_counter()-start)*1000);inference.append(ms)
+        if index < samples:
+            total.append((time.perf_counter()-start)*1000);inference.append(ms)
         if index < len(bundles):
             saved.append((readings, outputs))
     scene_readings = []; parity = []; geometry_timings = []; camera_crops = []
-    for index, ((rgb, depth, registered, metadata), (readings, outputs)) in enumerate(zip(bundles, saved)):
+    for index, ((rgb, depth, registered, metadata), (readings, outputs)) in enumerate(zip(bundles, saved, strict=True)):
         parity.append(mask_reference(readings, outputs, rgb.shape))
         start = time.perf_counter()
         clouds, diagnostics = native_mask_points(depth, metadata, [item['mask'] for item in readings])

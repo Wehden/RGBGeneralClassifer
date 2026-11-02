@@ -74,6 +74,32 @@ Desktop CPU containers can extract its features if the GPU is unavailable.
 A visual encoder alone does not provide material labels: fit a supervised
 head against reviewed targets, then calibrate on validation.
 
+The separate DINOv2 extractor pins the source revision and downloads only
+its configuration, processor configuration and safetensors weights:
+
+```bash
+.venv-models/bin/python scripts/cache-dinov2-material-features.py cache
+```
+
+Mount the returned snapshot directory and private dataset read-only in the
+existing training container. Run extraction with network access disabled:
+
+```bash
+python scripts/cache-dinov2-material-features.py extract \
+  --source-directory /models/ed25f3a31f01632728cabb09d1542f84ab7b0056 \
+  --data /private/material-training/dataset \
+  --rows /private/material-training/output/evaluation-rows.json \
+  --output /private/dinov2-features --device cpu --batch-size 16
+```
+
+This validates sample hashes and writes separate normalized CLS and mean
+patch features with a source/processor receipt. Extraction includes
+immutable historical-test rows only as cached embeddings; it does not fit,
+predict or select against those rows. The canonical processor resizes and
+center-crops, which can discard parts of thin objects. Processor behavior
+must be recorded when comparing encoders. This is an experiment extractor,
+not a console-compatible exported material classifier.
+
 The historical MINC control cannot automatically be treated as a clean
 holdout for a published MINC-specialist model; training-image overlap may
 exist. Published paper accuracy is not a result on our captures.

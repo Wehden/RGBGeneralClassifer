@@ -60,6 +60,14 @@ dataset/feature/training provenance), and `head-validation-logits.npz` with
 matching `head-validation-rows.json`. These files support a later export after
 verification; the head stage does not create or deploy an inference artifact.
 The normal `--stage train` still trains and exports both variants.
+For new full-training experiments, pass `--stage train --validation-only`.
+The trainer verifies the original cache alignment and performs the original
+heldout-appearance duplicate purge, then removes all historical test rows and
+their features before training or extracting images. Both exported variants
+retain validation calibration and metrics. Results contain no historical test
+or zero-shot-test metrics, and saved logits/IDs align with the retained rows.
+Provenance records the omission count, a checksum of omitted IDs and the purge
+ordering. The default full-training replay retains its original test reports.
 
 ## Preregistered review exclusions
 

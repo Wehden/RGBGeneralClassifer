@@ -131,3 +131,56 @@ def test_review_manifest_aliases_and_action_lists_cannot_disagree(tmp_path,monke
     document['actions']=[{'id':'0','decision':'exclude'},{'id':'20','decision':'flag'}]
     document['source_labels_sha256']='wrong';path.write_text(json.dumps(document))
     with pytest.raises(ValueError,match='aliases disagree'):train.apply_review_manifest(rows,data,path)
+
+
+def test_validation_only_fulltrain_purges_first_and_never_extracts_test_images(tmp_path,monkeypatch):
+    import torch
+    from types import SimpleNamespace
+    data,output,rows=head_fixture(tmp_path,monkeypatch)
+    rows[0]['source_kind']='camera'
+    for index,row in enumerate(rows):row['file']=f"{row['split']}-{index}.png"
+    cache=np.load(output/'features.npz')
+    features=cache['features'].copy()
+    features[0]=features[-4:]=[0,1]
+    np.savez(output/'features.npz',features=features,ids=cache['ids'])
+    manifest=json.loads((output/'feature-manifest.json').read_text())
+    manifest.update(features_sha256=train.digest(output/'features.npz'),input_size=2)
+    (output/'feature-manifest.json').write_text(json.dumps(manifest))
+
+    class Vision(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder=torch.nn.Module()
+            self.encoder.layers=torch.nn.ModuleList([torch.nn.Linear(2,2) for _ in range(12)])
+            self.post_layernorm=torch.nn.Linear(2,2)
+            self.head=torch.nn.Linear(2,2)
+            for layer in [*self.encoder.layers,self.post_layernorm,self.head]:
+                with torch.no_grad():layer.weight.copy_(torch.eye(2));layer.bias.zero_()
+        def forward(self,pixel_values):
+            values=pixel_values[:,:2].mean(dim=(-1,-2))
+            for layer in self.encoder.layers:values=layer(values)
+            return SimpleNamespace(pooler_output=self.head(self.post_layernorm(values)))
+    monkeypatch.setattr(train,'source_model',lambda **kw:(SimpleNamespace(vision_model=Vision()),None,{}))
+    extracted=[]
+    def prepare(path,size,config):
+        assert not path.name.startswith('test-')
+        extracted.append(path.name)
+        return np.ones((3,size,size),np.float32)
+    monkeypatch.setattr(train,'prepare_image',prepare)
+    exports=[]
+    monkeypatch.setattr(train,'export_artifact',lambda *args:exports.append(args))
+    train.setup()
+    train.train(data,output,torch.device('cpu'),epochs=1,validation_only=True)
+    summary=json.loads((output/'results.json').read_text())
+    saved=np.load(output/'evaluation-logits.npz')
+    retained=json.loads((output/'evaluation-rows.json').read_text())
+    assert saved['ids'].tolist()==[row['id'] for row in retained]
+    assert len(saved['frozen'])==len(saved['tuned'])==len(retained)==len(rows)-4
+    assert all(row['split']!='test' for row in retained)
+    assert summary['training']['purged_camera_near_duplicates']==['0']
+    assert summary['training']['evaluation_scope']['historical_test_rows_omitted']==4
+    assert len(extracted)==len(retained)
+    assert len(exports)==2
+    assert 'zero_shot_test' not in summary
+    assert 'zero_shot_similarities' not in saved.files
+    assert all('test' not in result for result in summary['evaluations'].values())

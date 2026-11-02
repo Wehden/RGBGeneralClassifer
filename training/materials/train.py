@@ -342,7 +342,7 @@ def export_artifact(vision,head,config,text,calibration,directory,training,parit
 
 def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2,
           camera_rejection_mass=.1,minimum_camera_accepted_references=0,minimum_camera_validation_targets=10,
-          head_only=False,review_manifest=None):
+          head_only=False,review_manifest=None,validation_only=False):
     rows=load_rows(data,True)
     cached=np.load(output/'features.npz',allow_pickle=False)
     if cached['ids'].tolist()!=[row['id'] for row in rows]:raise ValueError('Feature/sample alignment mismatch')
@@ -360,6 +360,14 @@ def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2
         if row['source_kind']=='camera' and row['split']=='train' and heldout:
             if float((embedded[heldout]@embedded[i]).max())>=.985:
                 row['split']='excluded-near-duplicate';purged.append(row['id'])
+    omitted_test_ids=[row['id'] for row in rows if row['split']=='test'] if validation_only else []
+    if validation_only:
+        # Original heldout appearance filtering runs first; test rows then leave
+        # every optimization, prediction and image extraction path.
+        retained=[i for i,row in enumerate(rows) if row['split']!='test']
+        rows=[rows[i] for i in retained]
+        embedded=embedded[retained]
+    retained_ids=np.array([row['id'] for row in rows])
     train_ids,raw_weights,weighting_report=loss_weights(
         rows,weighting,camera_material_mass,camera_rejection_mass)
     active=set(train_ids)
@@ -420,6 +428,11 @@ def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2
               'source_revision':REVISION,'prompts':[f'This is a photo of an object made of {label}.' for label in LABELS[:12]]+
               ['This is a photo of a person or human skin.','This is a photo of food.',
                'This is a blurry photo of an unidentifiable object.']}
+    if validation_only:
+        training['evaluation_scope']={'validation_only':True,'historical_test_rows_omitted':len(omitted_test_ids),
+                                      'omitted_test_ids_sha256':hashlib.sha256(
+                                          json.dumps(omitted_test_ids,separators=(',',':')).encode()).hexdigest(),
+                                      'purge_scope':'Original aligned heldout embeddings before test exclusion'}
     if head_only:
         calibration=calibrate(frozen_logits,evaluation_rows,minimum_camera_accepted_references)
         evaluation={'validation':metrics(frozen_logits,evaluation_rows,'validation',
@@ -486,13 +499,14 @@ def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2
     for name,logits in [('frozen-head',frozen_logits),('fine-tuned',tuned_logits)]:
         calibration=calibrations[name]
         evaluations[name]={'validation':metrics(logits,rows,'validation',calibration['temperature'],calibration['minimum_probability']),
-                           'test':metrics(logits,rows,'test',calibration['temperature'],calibration['minimum_probability']),
                            'calibration':calibration,'validation_objective':best if name=='frozen-head' else best_fine}
-    base_similarities=embedded@text.T
-    baseline_top=base_similarities.argmax(axis=1)
+        if not validation_only:
+            evaluations[name]['test']=metrics(logits,rows,'test',calibration['temperature'],calibration['minimum_probability'])
+    base_similarities=None if validation_only else embedded@text.T
+    baseline_top=None if validation_only else base_similarities.argmax(axis=1)
     # Preserve the original zero-shot acceptance operating point.
     baseline={}
-    for kind in ['MINC','camera']:
+    for kind in ([] if validation_only else ['MINC','camera']):
         ids=[i for i,row in enumerate(rows) if row['split']=='test' and row['source_kind']==kind and row['target']>=0
              and row['material'] not in REJECTIONS]
         baseline[kind]={'references':len(ids),'top1_correct':int(sum(baseline_top[i]==rows[i]['target'] for i in ids)),
@@ -500,11 +514,13 @@ def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2
     preferred=max(evaluations,key=lambda key:evaluations[key]['validation_objective'])
     training['encoder_tensors_changed']=changed
     summary={'training':{key:value for key,value in training.items() if key!='prompts'},'evaluations':evaluations,
-             'zero_shot_test':baseline,'preferred_by_validation':preferred,'fine_tune_history':history,
+             'preferred_by_validation':preferred,'fine_tune_history':history,
              'scope':'Camera labels are weak VLM supervision; MINC labels are dataset annotations'}
+    if not validation_only:summary['zero_shot_test']=baseline
     write(output/'results.json',summary)
-    np.savez_compressed(output/'evaluation-logits.npz',frozen=frozen_logits,tuned=tuned_logits,
-                        zero_shot_similarities=base_similarities,ids=cached['ids'])
+    saved_logits={'frozen':frozen_logits,'tuned':tuned_logits,'ids':retained_ids}
+    if not validation_only:saved_logits['zero_shot_similarities']=base_similarities
+    np.savez_compressed(output/'evaluation-logits.npz',**saved_logits)
     write(output/'evaluation-rows.json',rows)
     frozen_head=nn.Linear(embedded.shape[1],len(LABELS));frozen_head.load_state_dict(frozen_state)
     source,_,_=source_model(offline=True)
@@ -532,6 +548,7 @@ if __name__=='__main__':
     parser.add_argument('--minimum-camera-accepted-references',type=int,default=0)
     parser.add_argument('--minimum-camera-validation-targets',type=int,default=10)
     parser.add_argument('--review-manifest',type=Path)
+    parser.add_argument('--validation-only',action='store_true')
     args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     device=setup()
@@ -539,5 +556,5 @@ if __name__=='__main__':
     if args.stage=='features':cache_features(args.data,args.output,device)
     else:train(args.data,args.output,device,args.epochs,args.weighting,
                args.camera_material_mass,args.camera_rejection_mass,args.minimum_camera_accepted_references,
-               args.minimum_camera_validation_targets,args.stage=='head',args.review_manifest)
+               args.minimum_camera_validation_targets,args.stage=='head',args.review_manifest,args.validation_only)
     print(json.dumps({'elapsed_s':time.monotonic()-started,'device':str(device)}),flush=True)

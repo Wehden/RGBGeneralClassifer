@@ -187,5 +187,5 @@ def volume_label(volume):
     estimate = volume.get('estimate_m3')
     if estimate is None:
         return 'volume unavailable'
-    kind = 'cylinder' if volume.get('method') == 'upright_cylinder' else 'visible box'
+    kind = 'cyl' if volume.get('method') == 'upright_cylinder' else 'visible box'
     return f'~{estimate*1000:.3g} L ({kind})'

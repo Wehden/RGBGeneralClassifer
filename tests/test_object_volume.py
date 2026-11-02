@@ -35,11 +35,13 @@ def test_shape_closure_requires_axis_and_reports_mask_truncation():
     vertical = {'normal': [0, 1, 0], 'assumption': 'horizontal reference'}
     result = cloud_estimate(points, 'paper cup', vertical)
     assert result['method'] == 'upright_cylinder'
+    assert volume_label(result).endswith('(cyl)')
     assert result['estimate_m3'] == pytest.approx(np.pi*.04**2*.1, rel=.06)
     assert result['physical_accuracy'] == 'unverified'
     assert result['dimensions_m'][0] == pytest.approx(.08, rel=.01)
     missing = cloud_estimate(points, 'cup')
     assert missing['method'] == 'trimmed_visible_point_box'
+    assert '(cyl)' not in volume_label(missing)
     assert missing['cylinder']['status'] == 'no_vertical_reference'
     clipped = cloud_estimate(points, 'cup', vertical, truncated=True)
     assert clipped['cylinder']['status'] == 'truncated_object'

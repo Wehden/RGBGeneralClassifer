@@ -81,7 +81,7 @@ test('volume is hidden for RGB-only snapshots and conditional estimates retain t
   data.rows[0].volume={status:'conditional_estimate',method:'upright_cylinder',estimate_m3:.000388};
   table=context.window.RGBComparison.rowsTable(data);
   assert.equal(table.children[0].children[0].children.length,7);
-  assert.equal(table.children[1].children[0].children[6].textContent,'~388 mL · cylinder estimate');
+  assert.equal(table.children[1].children[0].children[6].textContent,'~388 mL (cyl) · cylinder estimate');
   data.rows[0].volume={status:'insufficient_depth',estimate_m3:null};
   table=context.window.RGBComparison.rowsTable(data);
   assert.equal(table.children[1].children[0].children[6].textContent,'Unavailable · insufficient depth');

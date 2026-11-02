@@ -30,7 +30,8 @@ with the cylinder rejection reason retained separately.
 
 Every result carries source frame/session/calibration identity, method,
 sample counts, dimensions in metres, volume in m³, warnings and
-`physical_accuracy: "unverified"`. The UI displays mL or L. External volume
+`physical_accuracy: "unverified"`. The UI displays mL or L, with `(cyl)`
+next to readings that use a successful cylinder estimate. External volume
 does not establish vessel capacity or material composition.
 No volumes are summed across detections: masks can overlap, detections can
 describe parts of the same object, and single views are incomplete.

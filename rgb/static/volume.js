@@ -6,7 +6,8 @@
       return 'Unavailable · '+volume.status.replaceAll('_',' ');
     const litres=volume.estimate_m3*1000;
     const amount=litres<1?`${(litres*1000).toPrecision(3)} mL`:`${litres.toPrecision(3)} L`;
-    return `~${amount} · ${volume.method==='upright_cylinder'?'cylinder estimate':'visible box proxy'}`;
+    const cylinder=volume.method==='upright_cylinder';
+    return `~${amount}${cylinder?' (cyl)':''} · ${cylinder?'cylinder estimate':'visible box proxy'}`;
   }
   function details(volume){
     if(!volume)return [];
@@ -22,7 +23,7 @@
     for(const assumption of volume.assumptions||[])lines.push('Assumption: '+assumption);
     const core=volume.mask_sensitivity;
     if(core)lines.push(Number.isFinite(core.estimate_m3)
-      ? `With mask edges removed: ${(core.estimate_m3*1000).toPrecision(3)} L (${core.method.replaceAll('_',' ')}) · sensitivity comparison`
+      ? `With mask edges removed: ${(core.estimate_m3*1000).toPrecision(3)} L${core.method==='upright_cylinder'?' (cyl)':''} · ${core.method==='upright_cylinder'?'cylinder estimate':'visible box proxy'} · sensitivity comparison`
       : `With mask edges removed: unavailable (${core.status.replaceAll('_',' ')})`);
     for(const warning of volume.warnings||[])lines.push(warning);
     return lines;

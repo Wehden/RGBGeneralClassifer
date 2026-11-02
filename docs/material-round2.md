@@ -96,6 +96,60 @@ that all DINO architectures or fine-tunes are inferior.
 See [material-alternatives.md](material-alternatives.md) for source revisions,
 licenses, MINC specialists, DINOv3 access constraints and further options.
 
+### Follow-up: matched 384px crops and larger DINOv2 encoders
+
+The canonical DINOv2 run above uses 224px centre crops. A second measurement
+matches SigLIP2's RGB/PIL bicubic resize to 384×384 and disables centre cropping.
+DINOv2 retains its own mean/std normalization. Original sample hashes,
+1,360 selected train/validation rows, targets, splits, all 78 probe configurations
+and the 70/30 objective remain fixed. Small, base and large were evaluated
+with both final CLS and mean-final-patch representations, adding 468 exploratory
+validation candidates. No backbone fine-tuning or multi-layer feature
+concatenation was performed.
+
+| Matched-384 encoder, best objective-selected probe | MINC correct / 200 | Camera correct / 12 | Camera class-macro | Objective |
+| --- | ---: | ---: | ---: | ---: |
+| DINOv2 small, mean patches | 146 | 5 | 38.9% | 0.6360 |
+| DINOv2 base, mean patches | 151 | 6 | 44.4% | 0.6785 |
+| DINOv2 large, mean patches | 139 | 8 | 55.6% | 0.6865 |
+| Original frozen SigLIP2 ridge comparator | 155 | 7 | 50.0% | 0.7175 |
+| Deployed fine-tuned SigLIP2 | 156 | 7 | 50.0% | 0.7210 |
+
+Matching crops does not improve small: its mean-patch result moves from
+148/200 and 6/12 to 146/200 and 5/12. Larger encoders can improve camera
+agreement, with a public-data tradeoff. Large gains one camera match but loses
+16 public matches against the frozen SigLIP2 ridge comparator. Base's
+objective-selected CLS probe reaches 9/12 camera but only 120/200 MINC.
+The camera set is highly imbalanced: an always-fabric baseline also achieves
+9/12 raw agreement, but only 50% class-macro agreement. That CLS probe has
+61.1% class-macro agreement, supporting a limited signal rather than a broad
+material accuracy claim.
+
+| Encoder | Parameters | FP32 source weights | Peak PyTorch allocated VRAM | Peak reserved VRAM |
+| --- | ---: | ---: | ---: | ---: |
+| Small | 22.1M | 84 MiB | 0.36 GiB | 0.45 GiB |
+| Base | 86.6M | 330 MiB | 0.83 GiB | 1.02 GiB |
+| Large | 304.4M | 1,161 MiB | 1.80 GiB | 1.98 GiB |
+
+All three complete at FP32/batch 16 on the 23 GiB A10G; memory is not the
+constraint. These per-process PyTorch statistics omit driver/context overhead
+and do not measure future fine-tuning or NUC runtime memory. Initial small
+selection was a preliminary NUC-oriented screen, not a desktop hardware requirement.
+
+DINOv2's 14px patch stride produces 27×27 patches from 384px, leaving the last
+six rows/columns outside its valid convolution grid. Positional embeddings
+interpolate automatically. This is recorded explicitly; no additional
+processor centre crop occurs. A separate canonical-224 CPU/GPU feature
+control over twelve validation crops passes the 1e-5 embedding-error gate:
+maximum absolute error is 1.27e-6 for CLS and 1.17e-6 for mean patches.
+Changing execution device does not explain the resolution comparison.
+
+The larger models remain feasible candidates for a controlled fine-tune,
+but none of these frozen screens beats the existing combined objective.
+Camera references are still weak and cover only two material classes.
+No console artifact or HF default release changes. Matched-crop receipts
+are stored privately under the round directory's `dinov2-384/` subdirectory.
+
 ## Paired crop study and teacher audit
 
 Four synchronized RGB/depth/IR bundles were acquired from the attached camera
@@ -230,7 +284,7 @@ directories. Experimental containers and immutable outputs use a separate
 dated directory on the training host. Raw images, internal hostnames,
 credentials and model binaries are not part of the PR.
 
-Verification: the combined application suite passes 376 tests with one
+Verification: the combined application suite passes 379 tests with one
 training-dependency skip; 27 trainer tests pass separately in the model
 environment. The CPU candidate check above evaluates the complete validation
 set. The independent image audit reconstructs all 32 stored JPEGs and source

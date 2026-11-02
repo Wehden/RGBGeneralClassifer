@@ -144,6 +144,59 @@ This is a frozen-small-encoder comparison with canonical preprocessing;
 it does not rule out a different DINO fine-tune, resolution or foreground
 patch protocol. There is no evidence here to switch the console encoder.
 
+### Matched 384px follow-up
+
+The extractor now supports `--crop-mode siglip384` and
+`--model-size small|base|large`. This matches SigLIP2's full crop geometry:
+RGB conversion and PIL bicubic resizing to 384×384 before source DINOv2
+normalization, with processor resizing and centre cropping disabled.
+Effective input dimensions, patch-grid boundary, token count, parameter count,
+source file size and CUDA allocated/reserved memory are recorded.
+Nonempty output directories are rejected to protect earlier measurements.
+
+| Mean-final-patch representation, best objective-selected probe | MINC correct / 200 | Camera correct / 12 | Objective |
+| --- | ---: | ---: | ---: |
+| Small, 384 square | 146 | 5 | 0.6360 |
+| Base, 384 square | 151 | 6 | 0.6785 |
+| Large, 384 square | 139 | 8 | 0.6865 |
+
+Small does not improve over its canonical 224 result. Larger models can
+gain camera matches with a public-data tradeoff. The base CLS result is
+120/200 and 9/12; class-macro camera agreement is 61.1%. The weak camera set
+has nine fabric and three plastic references, so always predicting fabric
+already obtains 9/12 raw agreement. No frozen DINOv2 configuration beats
+the original frozen SigLIP2 ridge objective, 0.7175.
+
+Memory does not block desktop inference: at batch16/FP32, small/base/large
+peak allocated VRAM is 0.36/0.83/1.80 GiB, respectively. Large reserves
+1.98 GiB on the 23 GiB A10G. Training and NUC inference are separate,
+unmeasured memory questions for the larger encoders.
+
+Pinned additions, verified as ungated Apache-2.0 checkpoints on 2026-11-02:
+
+- `facebook/dinov2-base`, revision `f9e44c814b77203eaa57a6bdbbd535f21ede1415`.
+- `facebook/dinov2-large`, revision `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c`.
+
+For example, preload base's public snapshot on the training host, then use
+that pinned snapshot in a network-disabled extraction container:
+
+```bash
+python scripts/cache-dinov2-material-features.py cache --model-size base
+python scripts/cache-dinov2-material-features.py extract \
+  --model-size base --crop-mode siglip384 \
+  --source-directory /models/f9e44c814b77203eaa57a6bdbbd535f21ede1415 \
+  --data /private/material-training/dataset \
+  --rows /private/train-validation-rows.json \
+  --output /private/dinov2-base-384 --device cuda --batch-size 16
+```
+
+Run the same CLS/mean-patch probe commands against these new feature files.
+Keep all samples and head configurations fixed. DINOv2's stride14 grid
+consumes 378×378 pixels of the 384 input; the final six bottom/right rows
+are outside its valid convolution support. This does not prevent 384
+inference, and is recorded rather than hidden by another processor crop.
+See `material-round2.md` for the full comparison and hardware measurements.
+
 The historical MINC control cannot automatically be treated as a clean
 holdout for a published MINC-specialist model; training-image overlap may
 exist. Published paper accuracy is not a result on our captures.

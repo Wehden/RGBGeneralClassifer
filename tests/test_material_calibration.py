@@ -11,7 +11,7 @@ import pytest
 def calibration():
     path = Path(__file__).resolve().parents[1]/'training/materials/train.py'
     source = ast.parse(path.read_text(), filename=str(path))
-    names = {'LABELS', 'REJECTIONS', 'softmax', 'metrics', 'calibrate'}
+    names = {'LABELS', 'REJECTIONS', 'softmax', 'loss_weights', 'metrics', 'objective', 'calibrate'}
     nodes = [node for node in source.body if (
         isinstance(node, ast.FunctionDef) and node.name in names or
         isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in node.targets))]

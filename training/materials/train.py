@@ -132,9 +132,67 @@ def softmax(logits,temperature=1):
     return values/values.sum(axis=1,keepdims=True)
 
 
+def loss_weights(rows,mode='legacy',camera_material_mass=.2,camera_rejection_mass=.1):
+    """Use training rows only; balance classes inside explicitly weighted domains."""
+    if mode not in ['legacy','domain-balanced','public-only']:
+        raise ValueError('Unknown training weighting')
+    eligible=[i for i,row in enumerate(rows) if row['split']=='train' and row['target']>=0]
+    if not eligible:raise ValueError('No training labels')
+    qualities=np.array([rows[i]['weight'] for i in eligible],np.float64)
+    if not np.isfinite(qualities).all() or (qualities<0).any():
+        raise ValueError('Training weights must be finite and nonnegative')
+
+    def cohort(row):
+        if row['source_kind']=='MINC':return 'MINC'
+        if row['source_kind']=='camera':
+            return 'camera_rejection' if row['material'] in REJECTIONS else 'camera_material'
+        raise ValueError('Unknown training domain')
+
+    cohorts=[cohort(rows[i]) for i in eligible]
+    if mode=='legacy':
+        counts=Counter(rows[i]['target'] for i in eligible)
+        raw=np.array([rows[i]['weight']/np.sqrt(counts[rows[i]['target']])
+                      for i in eligible],np.float32)
+        masses=None
+    else:
+        if mode=='public-only':camera_material_mass=camera_rejection_mass=0.
+        masses={'MINC':1-camera_material_mass-camera_rejection_mass,
+                'camera_material':camera_material_mass,'camera_rejection':camera_rejection_mass}
+        if not all(np.isfinite(value) and 0<=value<=1 for value in masses.values()):
+            raise ValueError('Domain masses must be finite, nonnegative and sum to one')
+        raw=np.zeros(len(eligible),np.float64)
+        for name,mass in masses.items():
+            if mass==0:continue
+            ids=[j for j in range(len(eligible)) if cohorts[j]==name and qualities[j]>0]
+            if not ids:raise ValueError('Positive loss mass requires training examples: '+name)
+            classes={rows[eligible[j]]['target'] for j in ids}
+            for label in classes:
+                members=[j for j in ids if rows[eligible[j]]['target']==label]
+                total=qualities[members].sum()
+                raw[members]=mass/len(classes)*qualities[members]/total
+        # Zero-mass cohorts must not contribute support counts or training steps.
+        keep=raw>0
+        eligible=[i for i,active in zip(eligible,keep) if active]
+        cohorts=[name for name,active in zip(cohorts,keep) if active]
+        raw=raw[keep].astype(np.float32)
+    if not len(raw) or raw.sum()<=0:raise ValueError('No positive training weight')
+    report={'mode':mode,'requested_domain_mass':masses,'training_examples':len(eligible),
+            'effective_domain_mass':{},'effective_class_mass':{}}
+    total=float(raw.astype(np.float64).sum())
+    for name in ['MINC','camera_material','camera_rejection']:
+        positions=[j for j,value in enumerate(cohorts) if value==name]
+        report['effective_domain_mass'][name]=float(raw[positions].astype(np.float64).sum()/total)
+        report['effective_class_mass'][name]={}
+        for label in sorted({rows[eligible[j]]['material'] for j in positions}):
+            members=[j for j in positions if rows[eligible[j]]['material']==label]
+            report['effective_class_mass'][name][label]=float(raw[members].astype(np.float64).sum()/total)
+    return eligible,raw,report
+
+
 def metrics(logits,rows,split,temperature=1,threshold=1,margin=.05):
     values=softmax(logits,temperature)
     top=values.argmax(axis=1)
+    top3=np.argsort(values,axis=1)[:,-3:]
     ordered=np.sort(values,axis=1)
     accepted=(values.max(axis=1)>=threshold)&((ordered[:,-1]-ordered[:,-2])>=margin)
     accepted&=np.array([LABELS[index] not in REJECTIONS for index in top])
@@ -148,8 +206,23 @@ def metrics(logits,rows,split,temperature=1,threshold=1,margin=.05):
         target=[i for i in labeled if rows[i]['material'] not in REJECTIONS]
         accepted_ref=[i for i in labeled if accepted[i]]
         correct=sum(top[i]==rows[i]['target'] for i in target)
+        correct3=sum(rows[i]['target'] in top3[i] for i in target)
+        classes={rows[i]['material'] for i in target}
+        groups={}
+        for i in target:
+            group=rows[i].get('group_id',rows[i].get('id',str(i)))
+            groups.setdefault(group,[]).append(i)
         result[kind]={'examples':len(ids),'labeled_targets':len(target),
                       'correct_top1':int(correct),'top1_agreement':correct/len(target) if target else None,
+                      'correct_top3':int(correct3),'top3_agreement':correct3/len(target) if target else None,
+                      'classes_evaluated':len(classes),
+                      'class_macro_agreement':float(np.mean([
+                          np.mean([top[i]==rows[i]['target'] for i in target if rows[i]['material']==label])
+                          for label in classes])) if classes else None,
+                      'approximate_groups_evaluated':len(groups),
+                      'group_macro_agreement':float(np.mean([
+                          np.mean([top[i]==rows[i]['target'] for i in members])
+                          for members in groups.values()])) if groups else None,
                       'accepted':sum(bool(accepted[i]) for i in ids),
                       'accepted_with_reference':len(accepted_ref),
                       'accepted_reference_correct':int(sum(top[i]==rows[i]['target'] for i in accepted_ref)),
@@ -160,14 +233,18 @@ def metrics(logits,rows,split,temperature=1,threshold=1,margin=.05):
     return result
 
 
-def objective(logits,rows):
+def objective(logits,rows,minimum_camera_targets=10):
+    if type(minimum_camera_targets) is not int or minimum_camera_targets<1:
+        raise ValueError('Minimum camera validation targets must be a positive integer')
     result=metrics(logits,rows,'validation')
     public=result['MINC']['top1_agreement'] or 0
     camera=result['camera']
-    return .7*public+.3*camera['top1_agreement'] if camera['labeled_targets']>=10 else public
+    return .7*public+.3*camera['top1_agreement'] if camera['labeled_targets']>=minimum_camera_targets else public
 
 
-def calibrate(logits,rows):
+def calibrate(logits,rows,minimum_camera_accepted_references=0):
+    if type(minimum_camera_accepted_references) is not int or minimum_camera_accepted_references<0:
+        raise ValueError('Minimum camera accepted references must be a nonnegative integer')
     selected=[i for i,row in enumerate(rows) if row['split']=='validation' and row['target']>=0]
     targets=np.array([rows[i]['target'] for i in selected])
     temperature=min([.5,.75,1,1.5,2],key=lambda t:
@@ -179,12 +256,22 @@ def calibrate(logits,rows):
         if not cohort:continue
         if any(row['accepted_reference_agreement'] is None or row['accepted_reference_agreement']<.85 for row in cohort):
             continue
+        camera=result['camera']
+        if minimum_camera_accepted_references and (
+                camera['accepted_with_reference']<minimum_camera_accepted_references
+                or camera['accepted_reference_agreement'] is None
+                or camera['accepted_reference_agreement']<.85):
+            continue
         if sum(row['accepted_with_reference'] for row in cohort)<10:continue
         score=sum(row['accepted_with_reference'] for row in cohort)
         if score>coverage:threshold=float(candidate);coverage=score
-    return {'temperature':float(temperature),'minimum_probability':threshold,'minimum_margin':.05,
+    result={'temperature':float(temperature),'minimum_probability':threshold,'minimum_margin':.05,
             'selection':'Maximum validation reference coverage subject to >=85% agreement per evaluable domain',
             'qualified_for_acceptance':coverage>=0}
+    if minimum_camera_accepted_references:
+        result['minimum_camera_accepted_references']=minimum_camera_accepted_references
+        result['selection']+=' and minimum accepted camera references'
+    return result
 
 
 def export_artifact(vision,head,config,text,calibration,directory,training,parity_images):
@@ -224,7 +311,8 @@ def export_artifact(vision,head,config,text,calibration,directory,training,parit
     write(directory/'manifest.json',manifest)
 
 
-def train(data,output,device,epochs=6):
+def train(data,output,device,epochs=6,weighting='legacy',camera_material_mass=.2,
+          camera_rejection_mass=.1,minimum_camera_accepted_references=0,minimum_camera_validation_targets=10):
     rows=load_rows(data,True)
     cached=np.load(output/'features.npz',allow_pickle=False)
     if cached['ids'].tolist()!=[row['id'] for row in rows]:raise ValueError('Feature/sample alignment mismatch')
@@ -241,11 +329,14 @@ def train(data,output,device,epochs=6):
         if row['source_kind']=='camera' and row['split']=='train' and heldout:
             if float((embedded[heldout]@embedded[i]).max())>=.985:
                 row['split']='excluded-near-duplicate';purged.append(row['id'])
-    train_ids=[i for i,row in enumerate(rows) if row['split']=='train' and row['target']>=0]
-    if not train_ids:raise ValueError('No training labels')
+    train_ids,raw_weights,weighting_report=loss_weights(
+        rows,weighting,camera_material_mass,camera_rejection_mass)
+    active=set(train_ids)
+    for i,row in enumerate(rows):
+        if weighting!='legacy' and row['split']=='train' and row['target']>=0 and i not in active:
+            row['split']='excluded-zero-weight'
     targets=torch.tensor([rows[i]['target'] for i in train_ids],device=device)
-    counts=Counter(targets.cpu().tolist())
-    weights=torch.tensor([rows[i]['weight']/np.sqrt(counts[rows[i]['target']]) for i in train_ids],device=device,dtype=torch.float32)
+    weights=torch.from_numpy(raw_weights).to(device)
     weights/=weights.mean()
     text=np.load(output/'text_embeddings.npy',allow_pickle=False)
     head=nn.Linear(embedded.shape[1],len(LABELS)).to(device)
@@ -261,7 +352,7 @@ def train(data,output,device,epochs=6):
         loss.backward();optimizer.step()
         if step%10==0:
             with torch.inference_mode():logits=head(all_features).cpu().numpy()
-            score=objective(logits,rows)
+            score=objective(logits,rows,minimum_camera_validation_targets)
             if score>best:
                 best=score;best_state={key:value.detach().cpu().clone() for key,value in head.state_dict().items()}
     head.load_state_dict(best_state)
@@ -299,7 +390,7 @@ def train(data,output,device,epochs=6):
             optimizer.step();total+=float(loss.detach())
         current_features=features(vision,images,device)
         with torch.inference_mode():logits=head(torch.from_numpy(current_features).to(device)).cpu().numpy()
-        score=objective(logits,rows)
+        score=objective(logits,rows,minimum_camera_validation_targets)
         history.append({'epoch':epoch+1,'loss_sum':total,'validation_objective':score})
         print(json.dumps({'stage':'fine-tune',**history[-1]}),flush=True)
         if score>best_fine:
@@ -311,7 +402,8 @@ def train(data,output,device,epochs=6):
     if changed==0:raise ValueError('Fine-tuning did not update encoder parameters')
     tuned_features=features(vision,images,device)
     with torch.inference_mode():tuned_logits=head(torch.from_numpy(tuned_features).to(device)).cpu().numpy()
-    calibrations={'frozen-head':calibrate(frozen_logits,rows),'fine-tuned':calibrate(tuned_logits,rows)}
+    calibrations={'frozen-head':calibrate(frozen_logits,rows,minimum_camera_accepted_references),
+                  'fine-tuned':calibrate(tuned_logits,rows,minimum_camera_accepted_references)}
     evaluations={}
     for name,logits in [('frozen-head',frozen_logits),('fine-tuned',tuned_logits)]:
         calibration=calibrations[name]
@@ -328,10 +420,17 @@ def train(data,output,device,epochs=6):
         baseline[kind]={'references':len(ids),'top1_correct':int(sum(baseline_top[i]==rows[i]['target'] for i in ids)),
                         'top1_agreement':sum(baseline_top[i]==rows[i]['target'] for i in ids)/len(ids) if ids else None}
     preferred=max(evaluations,key=lambda key:evaluations[key]['validation_objective'])
+    camera_validation_targets=sum(row['split']=='validation' and row['source_kind']=='camera'
+                                  and row['target']>=0 and row['material'] not in REJECTIONS for row in rows)
+    selection_weights={'public_weight':.7,'camera_weight':.3} if (
+        camera_validation_targets>=minimum_camera_validation_targets) else {'public_weight':1.,'camera_weight':0.}
     training={'labels_sha256':digest(data/'teacher-labels.json'),'dataset_sha256':digest(data/'dataset.json'),
               'controls_sha256':digest(data/'controls.json'),'seed':SEED,'epochs':epochs,
               'train_examples':len(train_ids),'camera_train_examples':sum(rows[i]['source_kind']=='camera' for i in train_ids),
               'train_material_counts':dict(Counter(rows[i]['material'] for i in train_ids)),
+              'loss_weighting':weighting_report,
+              'validation_selection':{'minimum_camera_targets':minimum_camera_validation_targets,
+                                      'camera_target_references':camera_validation_targets,**selection_weights},
               'purged_camera_near_duplicates':purged,'encoder_tensors_changed':changed,
               'gpu':torch.cuda.get_device_name(0) if device.type=='cuda' else None,
               'torch':torch.__version__,'source_model_type':feature_manifest['model_type'],
@@ -365,10 +464,17 @@ if __name__=='__main__':
     parser.add_argument('--data',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--epochs',type=int,default=6)
+    parser.add_argument('--weighting',choices=['legacy','domain-balanced','public-only'],default='legacy')
+    parser.add_argument('--camera-material-mass',type=float,default=.2)
+    parser.add_argument('--camera-rejection-mass',type=float,default=.1)
+    parser.add_argument('--minimum-camera-accepted-references',type=int,default=0)
+    parser.add_argument('--minimum-camera-validation-targets',type=int,default=10)
     args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     device=setup()
     started=time.monotonic()
     if args.stage=='features':cache_features(args.data,args.output,device)
-    else:train(args.data,args.output,device,args.epochs)
+    else:train(args.data,args.output,device,args.epochs,args.weighting,
+               args.camera_material_mass,args.camera_rejection_mass,args.minimum_camera_accepted_references,
+               args.minimum_camera_validation_targets)
     print(json.dumps({'elapsed_s':time.monotonic()-started,'device':str(device)}),flush=True)

@@ -19,6 +19,10 @@ The [first benchmark pilot](local-vision-volume-benchmarks.md) records larger-mo
 latency, a labeled material comparison, mask parity and native-depth SDK parity.
 Physical volume accuracy remains unmeasured.
 
+The console now attaches [per-object depth volume readings](per-object-volume.md)
+for supported depth captures. RGB-only cameras omit them. Visible-envelope
+proxies and conditional cylinder estimates retain their quality information.
+
 ## Install once; run offline
 
 The export environment is separate from the service. PyTorch, Transformers,

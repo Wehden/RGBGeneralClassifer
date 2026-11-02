@@ -145,6 +145,7 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     response=app.test_client().get('/api/events/'+event['event_id']+'/assets/material_crop_0')
     assert response.status_code==200 and hashlib.sha256(response.data).hexdigest()==reading['crop_sha256']
     crop=cv2.imdecode(np.frombuffer(response.data,np.uint8),cv2.IMREAD_COLOR)
+    response.close()
     x1,y1,x2,y2=bounds(detection['box'],40,30)
     assert np.array_equal(crop,cv2.cvtColor(frame.color_rgb[y1:y2,x1:x2],cv2.COLOR_RGB2BGR))
     records=app.test_client().get('/api/review/records?material=plastic').json['records']
@@ -157,7 +158,7 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     assert store.get(event['event_id'])['detections'][0]['display_label']=='plastic'
     response=app.test_client().get('/api/review/export/parquet')
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-        assert json.loads(archive.read('manifest.json'))['schema_version']==9
+        assert json.loads(archive.read('manifest.json'))['schema_version']==10
         rows=pq.read_table(pa.BufferReader(archive.read('material_readings.parquet'))).to_pylist()
         assert rows[0]['provider']=='siglip2' and rows[0]['confidence'] is None
         assert rows[0]['similarity']==.38 and rows[0]['accepted'] is True
@@ -196,7 +197,7 @@ def test_local_material_evidence_and_provider_audit_survive_shared_review(openro
     assert store.get(event['event_id'])['detections'][0]['label_provider']=='siglip2'
     with app.test_client().get('/api/review/export/arrow') as response:
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-            assert json.loads(archive.read('manifest.json'))['schema_version']==9
+            assert json.loads(archive.read('manifest.json'))['schema_version']==10
             attempts=pa.ipc.open_file(pa.BufferReader(archive.read('model_attempts.arrow'))).read_all().to_pylist()
             assert attempts[-1]['endpoint']==provider and attempts[-1]['outcome']=='success'
             assert attempts[-1]['ordered_image_sha256']==attempts[0]['ordered_image_sha256']

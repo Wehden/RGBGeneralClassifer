@@ -2,7 +2,8 @@
   "name": "rgb-classifier-browser-tests",
   "private": true,
   "scripts": {
-    "test:browser": "node tests/js/live-video.browser.cjs"
+    "test:browser": "node tests/js/live-video.browser.cjs",
+    "test:console": "node ci/console.browser.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"

@@ -17,6 +17,8 @@ async function search(before=null) {
   try {
     const response=await fetch(url); if (!response.ok) throw new Error(`Query failed (${response.status})`);
     const data=await response.json(),names=await sourceNames; $('rows').replaceChildren();
+    const hasVolume=data.records.some(r=>r.volume);
+    if($('volume-column'))$('volume-column').hidden=!hasVolume;
     for (const r of data.records) {
       const tr=document.createElement('tr'); cell(tr,new Date(r.observed_at).toLocaleString());cell(tr,(r.camera_name||names[r.source_id]||r.source_id)+(r.location?' · '+r.location:''));
       cell(tr,score(r.initial_label,r.initial_confidence));cell(tr,score(r.enhanced_label,r.enhanced_confidence));
@@ -29,7 +31,9 @@ async function search(before=null) {
         materialTexts.push(`Local: ${local.status==='identified'?local.label:'uncertain'} · ${reading}`);
       }
       if(r.materials?.length)materialTexts.push('VLM: '+r.materials.map(m=>score(m.label,m.confidence)).join(' · '));
-      cell(tr,materialTexts.join(' / ')||'Not read');cell(tr,r.analysis_status);
+      cell(tr,materialTexts.join(' / ')||'Not read');
+      if(hasVolume)cell(tr,window.RGBVolume.compact(r.volume));
+      cell(tr,r.analysis_status);
       const link=document.createElement('a'); link.href='/#event/'+r.observation_id;link.textContent='Open observation';cell(tr,'').append(link);$('rows').append(tr);
     }
     next=data.next_cursor; $('next').disabled=!next; $('query-status').textContent=`${data.records.length} records · Queried ${new Date(data.queried_at).toLocaleString()}`;

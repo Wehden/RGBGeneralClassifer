@@ -8,7 +8,10 @@
   };
   function rowsTable(snapshot){
     const table=element('table'),head=element('thead'),header=element('tr');
-    for(const text of ['Box','YOLOE object','Detection confidence','SigLIP2 material','Material score','Decision']){
+    const hasVolume=snapshot.rows.some(row=>row.volume);
+    const titles=['Box','YOLOE object','Detection confidence','SigLIP2 material','Material score','Decision'];
+    if(hasVolume)titles.push('Volume estimate');
+    for(const text of titles){
       header.append(element('th',text));
     }
     head.append(header);table.append(head);
@@ -18,9 +21,11 @@
       const score=m.score_type==='supervised_material_head_score'
         ? `${m.score.toFixed(3)} · learned`
         : `${m.similarity.toFixed(3)} · similarity`;
-      for(const text of [String(row.box_index+1),row.object.label,
+      const values=[String(row.box_index+1),row.object.label,
           `${(row.object.confidence*100).toFixed(1)}%`,m.best_candidate,score,
-          m.status==='identified'?`Identified: ${m.label}`:'Uncertain']){
+          m.status==='identified'?`Identified: ${m.label}`:'Uncertain'];
+      if(hasVolume)values.push(root.RGBVolume.compact(row.volume));
+      for(const text of values){
         tr.append(element('td',text));
       }
       body.append(tr);
@@ -113,7 +118,7 @@
         const box=element('span',undefined,'box');
         box.style.top=`${row.box[0]*100}%`;box.style.left=`${row.box[1]*100}%`;
         box.style.height=`${(row.box[2]-row.box[0])*100}%`;box.style.width=`${(row.box[3]-row.box[1])*100}%`;
-        box.append(element('span',String(row.box_index+1)));frame.append(box);
+        box.append(element('span',String(row.box_index+1)+(row.volume?' · '+root.RGBVolume.overlay(row.volume):'')));frame.append(box);
       }
       const table=element('div',undefined,'comparison-table');table.append(rowsTable(snapshot));
       this.content.replaceChildren(frame,table);

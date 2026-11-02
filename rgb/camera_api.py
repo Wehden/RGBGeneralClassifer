@@ -163,6 +163,9 @@ class CameraAPI:
                             for d in result['detections']:
                                 x1,y1,x2,y2=bounds(d['box'],color.shape[1],color.shape[0])
                                 label=d.get('display_label',d.get('live_value',{}).get('display_label',d['label']))
+                                from rgb.object_volume import volume_label
+                                volume=volume_label(d.get('volume'))
+                                if volume:label+=' / '+volume
                                 cv2.rectangle(color,(x1,y1),(x2,y2),(50,220,90),2)
                                 cv2.putText(color,label,(x1,max(15,y1-5)),cv2.FONT_HERSHEY_SIMPLEX,.5,(50,220,90),1)
                             image=jpg(color)

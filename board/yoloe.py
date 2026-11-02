@@ -20,20 +20,54 @@ def prepare(frame,size):
     return tensor,(gain,left,top)
 
 
-def decode(output,labels,shape,transform,threshold):
+def decode(output,labels,shape,transform,threshold,*,include_row_index=False):
     if output.ndim!=3 or output.shape[0]!=1 or output.shape[2] not in (6,38):
         raise ValueError('Expected YOLOE end-to-end [1,N,6 or 38] output')
     h,w=shape[:2];gain,left,top=transform
     found=[]
-    for row in output[0]:
+    for row_index,row in enumerate(output[0]):
         x1,y1,x2,y2,score,cls=row[:6]
         if not np.isfinite(row[:6]).all() or not 0<=score<=1 or score<threshold:continue
         if cls!=int(cls) or not 0<=int(cls)<len(labels):continue
         box=[float(np.clip((y1-top)/gain/h,0,1)),float(np.clip((x1-left)/gain/w,0,1)),float(np.clip((y2-top)/gain/h,0,1)),float(np.clip((x2-left)/gain/w,0,1))]
         if box[2]<=box[0] or box[3]<=box[1]:continue
         found.append({'class_id':int(cls),'label':labels[int(cls)],'confidence':round(float(score),4),'box':box})
+        if include_row_index:found[-1]['row_index']=row_index
         if len(found)==100:break
     return found
+
+
+def _openvino_gather_contract(graph):
+    """Preserve YOLOE top-k gathers across OpenVINO's Slice elimination pass.
+
+    OpenVINO 2026.2.1 can remove a channel Slice before GatherElements, then
+    reject its own rewritten graph because the data/indices widths differ.
+    An equivalent batch GatherND retains the channel coordinates explicitly.
+    Apply only to the static rank-three, axis-one contract used by these exports.
+    """
+    import openvino as ov
+    replacements=0
+    for node in graph.get_ordered_ops():
+        if node.get_type_name()!='GatherElements' or node.get_attributes()['axis']!=1:
+            continue
+        data,indices=node.input_value(0),node.input_value(1)
+        if not data.get_partial_shape().is_static or not indices.get_partial_shape().is_static:
+            continue
+        shape=list(indices.get_shape())
+        source_shape=list(data.get_shape())
+        if (len(shape)!=3 or len(source_shape)!=3
+                or shape[0]!=source_shape[0] or shape[2]!=source_shape[2]):
+            continue
+        rows=ov.opset13.unsqueeze(ov.opset13.convert(indices,'i64'),[-1])
+        columns=np.broadcast_to(np.arange(shape[2],dtype=np.int64),shape).copy()[...,None]
+        coordinates=ov.opset13.concat([rows,ov.opset13.constant(columns)],-1)
+        replacement=ov.opset13.gather_nd(data,coordinates,batch_dims=1)
+        replacement.set_friendly_name(node.get_friendly_name())
+        replacement.output(0).set_names(node.output(0).get_names())
+        node.output(0).replace(replacement.output(0))
+        replacements+=1
+    graph.validate_nodes_and_infer_types()
+    return replacements
 
 
 class Detector:
@@ -53,6 +87,7 @@ class Detector:
             graph=core.read_model(str(model))
             if list(graph.input(0).shape)!=[1,3,self.size,self.size] or graph.input(0).element_type!=ov.Type.f32:
                 raise ValueError('YOLOE input contract mismatch')
+            gather_replacements=_openvino_gather_contract(graph)
             options={'PERFORMANCE_HINT':'LATENCY','NUM_STREAMS':1,'INFERENCE_PRECISION_HINT':'f32'}
             if device=='CPU':options['INFERENCE_NUM_THREADS']=threads
             self.session=core.compile_model(graph,device,options)
@@ -74,12 +109,35 @@ class Detector:
         self.backend=backend
         vocabulary=json.dumps(self.labels,separators=(',',':'),ensure_ascii=False).encode()
         self.config={**{k:v for k,v in self.manifest.items() if k!='labels'},'label_count':len(self.labels),'vocabulary_sha256':hashlib.sha256(vocabulary).hexdigest(),'manifest_sha256':hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),'runtime':backend,'runtime_version':runtime_version,'provider':provider,'inference_threads':threads}
+        if backend=='openvino':self.config['gather_contract_replacements']=gather_replacements
 
-    def detect(self,frame):
+    def detect(self,frame,*,with_masks=False):
         tensor,transform=prepare(frame,self.size)
         start=time.monotonic()
-        output=(self.session([tensor])[self.output_port] if self.backend=='openvino'
-                else self.session.run(None,{self.input_name:tensor})[0])
+        if self.backend=='openvino':
+            tensors=self.session([tensor])
+            output=tensors[self.output_port]
+            prototypes=tensors[self.session.output(1)] if with_masks and len(self.session.outputs)>1 else None
+        else:
+            tensors=self.session.run(None,{self.input_name:tensor})
+            output=tensors[0]
+            prototypes=tensors[1] if with_masks and len(tensors)>1 else None
         ms=(time.monotonic()-start)*1000
         self.proposals=decode(output,self.labels,frame.shape,transform,0)
-        return [dict(p) for p in self.proposals if p['confidence']>=self.threshold],round(ms,2)
+        detections=[dict(p) for p in self.proposals if p['confidence']>=self.threshold]
+        self.instance_masks=[None]*len(detections)
+        self.mask_error=None
+        if not with_masks or prototypes is None:
+            return detections,round(ms,2)
+        selected=decode(output,self.labels,frame.shape,transform,0,include_row_index=True)
+        selected=[p for p in selected if p['confidence']>=self.threshold]
+        from rgb.instance_masks import instances
+        try:
+            masks={d['row_index']:d['mask'] for d in
+                   instances(output,prototypes,self.labels,frame.shape,transform,0,
+                             row_indices={p['row_index'] for p in selected})}
+            self.instance_masks=[masks.get(p['row_index']) for p in selected]
+        except ValueError as exc:
+            # A bad mask head must not hide otherwise valid object boxes.
+            self.mask_error=str(exc)
+        return detections,round(ms,2)

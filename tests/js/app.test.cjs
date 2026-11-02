@@ -14,6 +14,7 @@ class Element {
 function setup(){
   const nodes=new Map();
   const context=vm.createContext({LiveVideo:class { constructor(image,report){this.report=report;} start(url){this.url=url;this.report('Connecting live frame…');} stop(){this.url=null;} },document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},createElement:tag=>new Element(tag),querySelectorAll:selector=>selector==='[data-channel]'?[...nodes.values()].filter(n=>n.dataset.channel):[]},fetch:()=>new Promise(()=>{}),window:{addEventListener(){}},location:{hash:''},navigator:{},setInterval:()=>0,setTimeout:()=>0,clearInterval(){},clearTimeout(){}});
+  vm.runInContext(fs.readFileSync('rgb/static/volume.js','utf8'),context);
   vm.runInContext(fs.readFileSync('rgb/static/app.js','utf8'),context);
   return {context,node:id=>context.document.getElementById(id)};
 }

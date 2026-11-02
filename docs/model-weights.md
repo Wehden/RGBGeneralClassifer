@@ -21,9 +21,9 @@ model repository; download machines use a read-only token. Tokens stay outside
 Git. `--token-file` takes precedence over `HF_TOKEN` and normal Hub credentials.
 Do not put a token value in command arguments or receipts.
 
-## Publish from ventunoq
+## Publish an inference export
 
-Once the NUC's exported student directory reaches ventunoq, it must contain:
+Publish from the machine holding the exported student directory. It must contain:
 
 ```text
 manifest.json
@@ -39,15 +39,16 @@ make an incomplete or changed copy pass validation.
 ```sh
 .venv-artifacts/bin/python scripts/model-weights.py validate /path/to/student-export
 .venv-artifacts/bin/python scripts/model-weights.py publish /path/to/student-export \
-  --token-file "$HOME/Documents/HFToken.key"
+  --token-file "$HOME/Documents/HF.token"
 ```
 
 Publish verifies every artifact against the manifest, copies an upload snapshot,
 and verifies it again. One Hub commit contains the export, `release.json`, and
 a model card using the manifest's license. Extra source files, such as camera
-images or token files, are never included. The repo must already exist and be
-private. A concurrent change to its main branch causes the optimistic commit
-to fail rather than silently replace another release.
+images or token files, are never included. The repo and selected branch must
+already exist, and the repo must be private. A concurrent change to the selected
+branch causes the optimistic commit to fail rather than silently replace another
+release.
 
 The command prints JSON containing `repo`, the full immutable `revision`, and
 `manifest_sha256`. Keep that output as the release receipt. Publication does
@@ -58,6 +59,53 @@ The tool preserves the manifest's qualification policy, including an unqualified
 head. For exports calibrated before the accepted-rejection-reference fix, rerun
 calibration/evaluation with the corrected trainer before treating the release
 as qualified. This does not require retraining the encoder.
+
+## Archive every completed weight experiment
+
+Preserve completed learned weights on the private Hub alongside their original
+configuration, checksums, upstream revisions, training provenance and
+qualification policy. Keep experimental exports on named `experiments/` branches;
+`publish` defaults to `main`, so always pass `--branch` when archiving a candidate.
+Uploading an experiment does not select it for the console.
+
+Create an archive branch from the current registry release once:
+
+```sh
+.venv-artifacts/bin/python - <<'PY'
+from pathlib import Path
+from huggingface_hub import HfApi
+
+api = HfApi(token=(Path.home() / "Documents/HF.token").read_text().strip())
+repo = "kwehden/rgb-material-student"
+info = api.model_info(repo)
+if not info.private:
+    raise SystemExit("The weight registry must remain private")
+api.create_branch(repo_id=repo, branch="experiments/my-material-run-fine-tuned",
+                  revision=info.sha, exist_ok=True)
+PY
+
+.venv-artifacts/bin/python scripts/model-weights.py publish /path/to/student-export \
+  --branch experiments/my-material-run-fine-tuned \
+  --token-file "$HOME/Documents/HF.token"
+```
+
+The publisher uses that branch's head as the optimistic parent and sends the
+branch explicitly to the Hub. Record the returned full commit SHA in the run's
+publication receipt. Download that exact SHA, compare every inference file
+against its original manifest, and retain the verification result. A named tag
+can help discovery; deployments still use the immutable full SHA.
+
+Head-screening runs save `head-state.pt` and `head-results.json` rather than
+inference exports. Archive both on a research branch, verify the original
+`classifier_sha256`, and include a checksum index. Do not pass these checkpoints
+to the console loader or rewrite their metadata into a fabricated export.
+Camera pixels, datasets, feature caches, teacher responses and credentials stay
+outside the weight registry. Unchanged upstream encoders can be referenced by
+their original Hub repository, full revision and source-file checksums.
+
+The [November 2 sync receipt](model-weight-sync-20261102.md) lists the deployed
+release, archived exports and checkpoint archive. Make publication and verified
+download part of completion for future weight experiments.
 
 ## Fetch a pinned version on Stepwise
 

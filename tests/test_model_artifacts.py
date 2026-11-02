@@ -30,9 +30,11 @@ class Hub:
         self.private = private
         self.uploads = {}
         self.kwargs = None
+        self.lookups = []
 
-    def model_info(self, repo):
-        return SimpleNamespace(private=self.private, sha='b'*40)
+    def model_info(self, repo, revision='main'):
+        self.lookups.append((repo, revision))
+        return SimpleNamespace(private=self.private, sha=('b' if revision == 'main' else 'c')*40)
 
     def create_commit(self, **kwargs):
         self.kwargs = kwargs
@@ -61,6 +63,7 @@ def test_publish_is_atomic_allowlisted_private_and_retains_qualification(artifac
     hub = Hub()
     receipt = publish(artifact, hub, SimpleNamespace)
     assert receipt['revision'] == SHA
+    assert hub.kwargs['revision'] == 'main'
     assert hub.kwargs['parent_commit'] == 'b'*40
     assert set(hub.uploads) == FILES | {'manifest.json', 'release.json', 'README.md'}
     assert json.loads(hub.uploads['manifest.json'])['classifier']['qualified_for_acceptance'] is False
@@ -70,6 +73,26 @@ def test_publish_is_atomic_allowlisted_private_and_retains_qualification(artifac
     with pytest.raises(ArtifactError, match='private'):
         publish(artifact, public, SimpleNamespace)
     assert public.kwargs is None
+
+
+def test_experimental_publish_targets_its_own_branch_and_parent(artifact):
+    hub = Hub()
+    receipt = publish(artifact, hub, SimpleNamespace, branch='experiments/balanced20-fine-tuned')
+    assert hub.lookups == [('kwehden/rgb-material-student', 'experiments/balanced20-fine-tuned')]
+    assert hub.kwargs['revision'] == 'experiments/balanced20-fine-tuned'
+    assert hub.kwargs['parent_commit'] == 'c'*40
+    assert receipt['revision'] == SHA
+    assert json.loads(hub.uploads['manifest.json'])['classifier']['qualified_for_acceptance'] is False
+
+
+def test_branch_conflict_does_not_return_a_release_receipt(artifact):
+    class ConflictHub(Hub):
+        def create_commit(self, **kwargs):
+            assert kwargs['revision'] == 'experiments/conflict'
+            assert kwargs['parent_commit'] == 'c'*40
+            raise RuntimeError('Concurrent Hub branch update')
+    with pytest.raises(RuntimeError, match='Concurrent'):
+        publish(artifact, ConflictHub(), SimpleNamespace, branch='experiments/conflict')
 
 
 @pytest.mark.parametrize('damage', ['corrupt', 'extra-path', 'symlink', 'missing', 'policy'])

@@ -65,10 +65,10 @@ def validate(directory):
     return manifest, {name:checksum(directory/name) for name in sorted(names)}
 
 
-def publish(directory, api, operation, repo=REPOSITORY):
+def publish(directory, api, operation, repo=REPOSITORY, branch='main'):
     """Upload a stable, allowlisted snapshot in one optimistic commit."""
     validate(directory)
-    info = api.model_info(repo)
+    info = api.model_info(repo, revision=branch)
     if not info.private:
         raise ArtifactError('Publishing requires an existing private model repository')
     with tempfile.TemporaryDirectory(prefix='rgb-publish-') as temporary:
@@ -90,7 +90,7 @@ def publish(directory, api, operation, repo=REPOSITORY):
                 'credentials, and checkpoints are not uploaded.\n')
         (stage/'README.md').write_text(card)
         names = sorted(hashes) + ['release.json', 'README.md']
-        commit = api.create_commit(repo_id=repo, repo_type='model', parent_commit=info.sha,
+        commit = api.create_commit(repo_id=repo, repo_type='model', revision=branch, parent_commit=info.sha,
                                    commit_message='Publish verified material student artifacts',
                                    operations=[operation(path_in_repo=name, path_or_fileobj=str(stage/name)) for name in names])
         revision = commit.oid

@@ -145,6 +145,7 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     response=app.test_client().get('/api/events/'+event['event_id']+'/assets/material_crop_0')
     assert response.status_code==200 and hashlib.sha256(response.data).hexdigest()==reading['crop_sha256']
     crop=cv2.imdecode(np.frombuffer(response.data,np.uint8),cv2.IMREAD_COLOR)
+    response.close()
     x1,y1,x2,y2=bounds(detection['box'],40,30)
     assert np.array_equal(crop,cv2.cvtColor(frame.color_rgb[y1:y2,x1:x2],cv2.COLOR_RGB2BGR))
     records=app.test_client().get('/api/review/records?material=plastic').json['records']

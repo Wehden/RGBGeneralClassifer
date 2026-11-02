@@ -231,3 +231,6 @@ Log/
 
 # Browser test dependencies
 node_modules/
+
+# Synthetic CI reports (never include a local capture archive).
+ci-results/

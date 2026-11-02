@@ -1,0 +1,6 @@
+# Test tools only: optional runtime lanes install their own OpenCV wheel.
+pytest==8.4.2
+pytest-cov==7.0.0
+coverage==7.13.5
+fakeredis[lua]==2.32.1
+ruff==0.14.3

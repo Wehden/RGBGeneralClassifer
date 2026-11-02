@@ -1,4 +1,3 @@
-pytest==8.4.2
-fakeredis[lua]==2.32.1
+-r requirements-test.txt
 numpy==2.4.6
 opencv-python-headless==5.0.0.93

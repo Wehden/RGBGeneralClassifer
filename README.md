@@ -1,5 +1,7 @@
 # RGB Console
 
+CI and release verification: [hosted qualification matrix and local reproduction](docs/ci-qualification.md).
+
 **RGB Console** supports Linux USB webcams and the **Orbbec Femto Bolt**
 with color, registered depth, and native IR. Visual review uses **Nova 2 Lite
 on Amazon Bedrock** by default through

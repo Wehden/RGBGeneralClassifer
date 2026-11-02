@@ -1,0 +1,14 @@
+[run]
+branch = True
+relative_files = True
+source =
+    rgb
+    board
+    common
+
+[report]
+show_missing = True
+precision = 2
+
+[html]
+directory = ci-results/coverage-html

@@ -100,6 +100,30 @@ center-crops, which can discard parts of thin objects. Processor behavior
 must be recorded when comparing encoders. This is an experiment extractor,
 not a console-compatible exported material classifier.
 
+Use the original selected sample rows across encoders, filtering out the
+historical test rows before extraction. The original SigLIP2 dataset already
+excluded near-duplicate references. Do not apply an additional
+DINO-specific similarity purge: changing the sample selection would confound
+the encoder comparison. Frozen-feature extraction introduces no new labels.
+
+Each pooling result can be probed independently without copying baseline
+logits or rearranging the feature cache:
+
+```bash
+OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 python \
+  scripts/probe-material-alternatives.py \
+  --run-directory /private/material-training/output \
+  --feature-file /private/dinov2-features/cls-features.npz \
+  --rows-file /private/train-validation-rows.json \
+  --skip-baselines --output /private/dinov2-cls-probes.json
+```
+
+Repeat using `mean_patch-features.npz`. Explicit row overrides accept only
+training and validation rows; legacy runs retain their historical-row cache
+without predicting on it. Receipts record hashes and actual source paths
+privately. Review both complete 78-candidate screens as exploratory
+validation evidence, then confirm any selected improvement on fresh objects.
+
 The historical MINC control cannot automatically be treated as a clean
 holdout for a published MINC-specialist model; training-image overlap may
 exist. Published paper accuracy is not a result on our captures.

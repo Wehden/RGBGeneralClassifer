@@ -128,6 +128,13 @@ def validation_metrics(scores, rows):
 
 
 def run(features, ids, rows, baselines):
+    if features.ndim != 2 or features.shape[1] < 1 or features.shape[0] != len(rows):
+        raise ValueError('Expected a nonempty-width feature matrix aligned with rows')
+    if len({row['id'] for row in rows}) != len(rows):
+        raise ValueError('Duplicate sample identity')
+    splits = {row['split'] for row in rows}
+    if not splits <= {'train', 'validation', 'test'} or not {'train', 'validation'} <= splits:
+        raise ValueError('Expected train and validation splits; only train/validation/test are supported')
     if ids.tolist() != [row['id'] for row in rows]:
         raise ValueError('Feature/sample alignment mismatch')
     if not np.isfinite(features).all() or not np.allclose(np.linalg.norm(features, axis=1), 1, atol=1e-4):
@@ -162,19 +169,39 @@ def run(features, ids, rows, baselines):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-directory', type=Path, required=True)
+    parser.add_argument('--feature-file', type=Path, help='Alternate normalized frozen embeddings')
+    parser.add_argument('--rows-file', type=Path, help='Fixed train/validation sample manifest, without historical test rows')
+    parser.add_argument('--skip-baselines', action='store_true', help='Do not load original-head logits for independent encoder probes')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     source = args.run_directory
-    rows = json.loads((source/'evaluation-rows.json').read_text())
-    with np.load(source/'features.npz', allow_pickle=False) as data:
+    feature_file = args.feature_file or source/'features.npz'
+    rows_file = args.rows_file or source/'evaluation-rows.json'
+    rows = json.loads(rows_file.read_text())
+    if args.rows_file and any(row['split'] not in {'train', 'validation'} for row in rows):
+        raise ValueError('Explicit rows-file permits train/validation rows only')
+    with np.load(feature_file, allow_pickle=False) as data:
         features, ids = data['features'].copy(), data['ids'].copy()
-    with np.load(source/'evaluation-logits.npz', allow_pickle=False) as data:
-        if data['ids'].tolist() != ids.tolist():
-            raise ValueError('Baseline/sample alignment mismatch')
-        baselines = {'frozen_head': data['frozen'].copy(), 'fine_tuned_head': data['tuned'].copy()}
+    baselines = {}
+    input_files = {'features.npz': feature_file, 'evaluation-rows.json': rows_file}
+    if not args.skip_baselines:
+        logits_file = source/'evaluation-logits.npz'
+        with np.load(logits_file, allow_pickle=False) as data:
+            baseline_ids = data['ids'].tolist()
+            if len(set(baseline_ids)) != len(baseline_ids):
+                raise ValueError('Duplicate baseline sample identity')
+            if not args.feature_file and not args.rows_file and baseline_ids != ids.tolist():
+                raise ValueError('Baseline/sample alignment mismatch')
+            indexes = {identity: i for i, identity in enumerate(baseline_ids)}
+            if any(identity not in indexes for identity in ids.tolist()):
+                raise ValueError('Baseline/sample alignment mismatch')
+            selected = [indexes[identity] for identity in ids.tolist()]
+            baselines = {'frozen_head': data['frozen'][selected].copy(),
+                         'fine_tuned_head': data['tuned'][selected].copy()}
+        input_files['evaluation-logits.npz'] = logits_file
     result = run(features, ids, rows, baselines)
-    result['inputs'] = {name: checksum(source/name) for name in
-                        ['features.npz', 'evaluation-rows.json', 'evaluation-logits.npz']}
+    result['inputs'] = {name: checksum(path) for name, path in input_files.items()}
+    result['input_paths'] = {name: str(path.resolve()) for name, path in input_files.items()}
     result['script_sha256'] = checksum(__file__)
     args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False)+'\n')

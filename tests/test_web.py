@@ -34,7 +34,8 @@ def test_dedup_replay_history_and_image(client,event):
     assert result[0]['analysis']['status'] == 'queued'
     assert c.get('/api/events?before='+result[0]['cursor']).json == []
     assert c.get('/api/events?before=broken').status_code == 400
-    assert c.get('/api/events/'+event['event_id']+'/image.jpg').data.startswith(b'\xff\xd8')
+    with c.get('/api/events/'+event['event_id']+'/image.jpg') as response:
+        assert response.data.startswith(b'\xff\xd8')
     assert c.get('/api/events/'+event['event_id']).json['location'] == 'Teaching bench'
     assert c.get('/api/events/not-a-uuid').status_code == 404
     assert c.get('/api/events/'+event['event_id']).headers['Cache-Control'] == 'no-store'
@@ -170,7 +171,8 @@ def test_live_decoder_script_and_blob_images_allowed(client):
     page = c.get('/')
     assert b'/static/live-video.js' in page.data
     assert "img-src 'self' blob:" in page.headers['Content-Security-Policy']
-    assert c.get('/static/live-video.js').status_code == 200
+    with c.get('/static/live-video.js') as response:
+        assert response.status_code == 200
 
 
 def test_vlm_status_reports_manual_pending_requests(client):

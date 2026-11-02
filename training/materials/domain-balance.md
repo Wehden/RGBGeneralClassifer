@@ -60,6 +60,10 @@ dataset/feature/training provenance), and `head-validation-logits.npz` with
 matching `head-validation-rows.json`. These files support a later export after
 verification; the head stage does not create or deploy an inference artifact.
 The normal `--stage train` still trains and exports both variants.
+Archive each completed checkpoint or exported variant using the
+[private Hugging Face process](../../docs/model-weights.md#archive-every-completed-weight-experiment).
+Record its full commit SHA and verified file checksums, including unqualified
+candidates, without selecting it as the console's default.
 For new full-training experiments, pass `--stage train --validation-only`.
 The trainer verifies the original cache alignment and performs the original
 heldout-appearance duplicate purge, then removes all historical test rows and

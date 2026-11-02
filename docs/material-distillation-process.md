@@ -162,6 +162,13 @@ Record `results.json`, evaluation rows/logits, training logs, container
 inspection and both artifact manifests. A failed export-parity gate means
 the artifact is not ready for local use.
 
+Archive both completed weight variants using the
+[private Hub publication process](model-weights.md#archive-every-completed-weight-experiment),
+including candidates that fail acceptance qualification. Retain each full Hub
+commit SHA and verified download receipt with the run. Head-only screening
+checkpoints use the research archive process rather than the inference publisher.
+Keep camera data, feature caches and teacher responses local.
+
 ## 7. Verify the artifact on the NUC
 
 Copy the artifact directories and evaluation receipts back through SSH:

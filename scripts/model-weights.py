@@ -17,6 +17,8 @@ def main():
     check.add_argument('directory', type=Path)
     upload = sub.add_parser('publish', help='Publish only manifest-listed inference files')
     upload.add_argument('directory', type=Path)
+    upload.add_argument('--branch', default='main',
+                        help='Existing Hub branch to publish into; archive experiments separately from main')
     pull = sub.add_parser('fetch', help='Verify and install a full commit-pinned release')
     pull.add_argument('--revision', required=True)
     pull.add_argument('--cache-dir', type=Path, default=Path.home()/'.cache/bolt-rgb/models')
@@ -37,7 +39,8 @@ def main():
     if args.token_file and not token:
         raise ArtifactError('Token file is empty')
     if args.command == 'publish':
-        return publish(args.directory, HfApi(token=token), CommitOperationAdd, repo=args.repo)
+        return publish(args.directory, HfApi(token=token), CommitOperationAdd, repo=args.repo,
+                       branch=args.branch)
     return fetch(args.revision, args.cache_dir, partial(hf_hub_download, token=token),
                  repo=args.repo, activate=args.activate)
 

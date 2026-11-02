@@ -35,15 +35,18 @@ floor and separate critical-module floors in `ci/coverage-budgets.json`.
 Missing report entries fail the gate; extra tests in one module cannot conceal
 a regression in another gated module.
 
-The initial aggregate floor is 73%. Camera-adapter unit coverage rose from
+The initial aggregate floor is 75%. Camera-adapter unit coverage rose from
 approximately 54% to over 75% through SDK contract tests. Storage, exports,
 provider handling and several geometry/comparison modules have substantially
-higher individual floors. Entry points and UI/runtime integration have separate
+higher individual floors. Local-worker coverage rose from approximately 70%
+to over 80%, and portable material artifact tests remove dependence on privately
+installed weights. Entry points and UI/runtime integration have separate
 qualification lanes; those reports do not inflate the unit coverage budget.
 Raise a module's budget after adding coverage. A reduction requires an explicit
 review explanation identifying the lost behavior and replacement verification.
 Do not omit code or add coverage exclusions merely to clear a gate.
 
+Actionlint checks workflow syntax, expressions and shell commands.
 Syntax/undefined-name checks, strict pytest configuration/markers, dependency
 consistency checks and immutable action/image pins run alongside behavioral tests.
 Dependabot proposes weekly GitHub Action and browser-test dependency updates.

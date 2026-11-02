@@ -23,7 +23,7 @@ def tiny_student():
     trainer.setup()
     vision = SiglipVisionModel(SiglipVisionConfig(
         hidden_size=16, intermediate_size=32, num_hidden_layers=1,
-        num_attention_heads=2, image_size=16, patch_size=8))
+        num_attention_heads=2, image_size=16, patch_size=8)).vision_model
     head = torch.nn.Linear(16, len(trainer.LABELS))
     return vision, head
 

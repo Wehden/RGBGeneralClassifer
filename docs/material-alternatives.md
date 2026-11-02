@@ -61,7 +61,7 @@ These heads are not exported or activated.
 
 | Technique | Why evaluate it | Current evidence / constraints |
 |---|---|---|
-| DINOv2 ViT-S/14, frozen CLS and mean-patch features | Self-supervised visual representations provide a different inductive bias; compare pooled object semantics with surface/patch evidence | Official small checkpoint is ungated, Apache-2.0 and about 88.25 MB FP32; no material result measured here yet |
+| DINOv2 ViT-S/14, frozen CLS and mean-patch features | Self-supervised visual representations provide a different inductive bias; compare pooled object semantics with surface/patch evidence | Official small checkpoint is ungated, Apache-2.0 and about 88.25 MB FP32; tested below |
 | Surface-patch or foreground-patch SigLIP2 pooling | Reduce background and object-category influence while retaining the existing encoder | Requires teacher labels corresponding to the exact student pixels and a fresh object holdout |
 | DINOv3 ViT-S/16 dense features | Newer dense-feature encoder; official small model has 21M parameters | Official HF checkpoint is manually gated and code/weights use the custom DINOv3 License; no download or acceptance of terms performed |
 | Published MINC-specialist GoogLeNet/VGG/AlexNet models | Directly trained for 23 material categories and dense material recognition | Authors provide a 714 MB archive and report 85.2% mean-class MINC accuracy for GoogLeNet; Caffe integration, label mapping, model-license details and pretraining overlap need verification before a fair comparison |
@@ -88,21 +88,21 @@ existing training container. Run extraction with network access disabled:
 python scripts/cache-dinov2-material-features.py extract \
   --source-directory /models/ed25f3a31f01632728cabb09d1542f84ab7b0056 \
   --data /private/material-training/dataset \
-  --rows /private/material-training/output/evaluation-rows.json \
+  --rows /private/train-validation-rows.json \
   --output /private/dinov2-features --device cpu --batch-size 16
 ```
 
 This validates sample hashes and writes separate normalized CLS and mean
-patch features with a source/processor receipt. Extraction includes
-immutable historical-test rows only as cached embeddings; it does not fit,
-predict or select against those rows. The canonical processor resizes and
+patch features with a source/processor receipt. This round excludes historical
+test rows before extraction. The canonical processor resizes and
 center-crops, which can discard parts of thin objects. Processor behavior
 must be recorded when comparing encoders. This is an experiment extractor,
 not a console-compatible exported material classifier.
 
-Use the original selected sample rows across encoders, filtering out the
-historical test rows before extraction. The original SigLIP2 dataset already
-excluded near-duplicate references. Do not apply an additional
+Use the original selected sample rows across encoders, retaining only rows
+whose original split is `train` or `validation`. The original SigLIP2 dataset
+already excluded three near-duplicate references; retain those exclusions.
+Do not apply an additional
 DINO-specific similarity purge: changing the sample selection would confound
 the encoder comparison. Frozen-feature extraction introduces no new labels.
 
@@ -123,6 +123,26 @@ training and validation rows; legacy runs retain their historical-row cache
 without predicting on it. Receipts record hashes and actual source paths
 privately. Review both complete 78-candidate screens as exploratory
 validation evidence, then confirm any selected improvement on fresh objects.
+
+### Measured DINOv2 results
+
+Both normalized CLS and mean-patch representations were extracted in the
+existing offline training container. The comparison retains 1,360 originally
+selected train/validation rows, with no new labels or model-specific purge.
+The extraction receipt also covers three already-excluded rows; a retained
+projection receipt binds their removal to the original split assignments.
+Each pooling variant was screened over all 78 probe configurations.
+
+| Best validation-selected DINOv2 probe | MINC correct / 200 | Camera correct / 12 | Camera top-three | Objective |
+|---|---:|---:|---:|---:|
+| CLS, ridge, camera 40%, rejection 10%, lambda 0.01 | 119 | 6 | 66.7% | 0.5665 |
+| Mean patches, ridge, camera 40%, rejection 10%, lambda 0.001 | 148 | 6 | 83.3% | 0.6680 |
+
+Mean patches are stronger than CLS on this material task, but neither
+representation beats SigLIP2's deployed fine-tuned objective of 0.7210.
+This is a frozen-small-encoder comparison with canonical preprocessing;
+it does not rule out a different DINO fine-tune, resolution or foreground
+patch protocol. There is no evidence here to switch the console encoder.
 
 The historical MINC control cannot automatically be treated as a clean
 holdout for a published MINC-specialist model; training-image overlap may

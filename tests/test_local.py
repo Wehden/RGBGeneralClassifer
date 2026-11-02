@@ -75,6 +75,63 @@ def test_frame_bundle_raw_planes_calibration_and_headers(local):
     assert client.get('/api/camera/thermal/snapshot.jpg').status_code==404
 
 
+def test_volume_is_absent_for_rgb_cameras_and_available_as_status_for_depth_cameras(local):
+    store,camera,frame,result,runtime,app=local
+    camera.backend='v4l2'
+    assert runtime._measure_volumes(frame,result['detections'],[None]) is None
+    assert 'volume' not in result['detections'][0]
+    rgb=make_frame(np.full((30,40,3),80,np.uint8),None,None,None,
+                   {**frame.metadata,'frame_id':str(uuid4()),'calibration':{},'profiles':{'color':{'width':40,'height':30}}})
+    camera.publish(rgb)
+    result.update(frame_id=rgb.id)
+    camera.latest_detection=(rgb,result)
+    client=app.test_client()
+    assert 'volume' not in client.get('/api/camera/detections').json['detections'][0]
+    runtime.archive(rgb,result)
+    assert 'volume' not in client.get('/api/review/records').json['records'][0]
+    camera.backend='orbbec'
+    summary=runtime._measure_volumes(rgb,result['detections'],[None])
+    assert summary['basis']=='native_depth_instance_mask'
+    assert result['detections'][0]['volume']['status']=='no_native_depth'
+    assert result['detections'][0]['volume']['estimate_m3'] is None
+
+
+def test_volume_provenance_survives_live_archive_records_and_typed_exports(local):
+    from rgb.object_volume import cloud_estimate
+    store,camera,frame,result,runtime,app=local
+    rng=np.random.default_rng(17)
+    points=rng.uniform([0,0,1],[.1,.2,1.3],size=(500,3))
+    volume={**cloud_estimate(points,'backpack'),'schema_version':1,'source_frame_id':frame.id,
+            'source_session_id':camera.session_id,'calibration_sha256':frame.metadata['calibration_sha256'],
+            'source_box':result['detections'][0]['box'],'coordinate_frame':'native_depth_camera',
+            'units':'m3','warnings':['boundary sensitivity unqualified']}
+    result['detections'][0]['volume']=volume
+    result['metrology']={'elapsed_ms':25.,'basis':'native_depth_instance_mask'}
+    client=app.test_client()
+    assert client.get('/api/camera/detections').json['detections'][0]['volume']==volume
+    event=runtime.archive(frame,result)
+    saved=client.get('/api/events/'+event['event_id']).json
+    assert saved['detections'][0]['volume']==volume
+    assert saved['metrology']==result['metrology']
+    assert client.get('/api/review/records').json['records'][0]['volume']==volume
+    for fmt in ['parquet','arrow']:
+        response=client.get('/api/review/records?format='+fmt)
+        buf=pa.BufferReader(response.data)
+        table=pq.read_table(buf) if fmt=='parquet' else pa.ipc.open_file(buf).read_all()
+        row=table.to_pylist()[0]
+        assert row['volume']['estimate_m3']==volume['estimate_m3']
+        assert row['volume']['source_frame_id']==frame.id
+        assert json.loads(row['volume_json'])==volume
+        with client.get('/api/review/export/'+fmt) as response:
+            assert response.status_code==200
+            with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+                buf=pa.BufferReader(archive.read('detections.'+fmt))
+                table=pq.read_table(buf) if fmt=='parquet' else pa.ipc.open_file(buf).read_all()
+                row=table.to_pylist()[0]
+                assert row['volume']['warnings']==volume['warnings']
+                assert json.loads(row['volume_json'])==volume
+
+
 def test_local_source_reports_actual_camera_name_without_renaming_archive_identity(local,monkeypatch):
     store,camera,frame,result,runtime,app=local
     camera.backend='v4l2'
@@ -493,7 +550,7 @@ def test_openrouter_shared_validation_audit_projection_status_and_export(openrou
     with app.test_client().get('/api/review/export/parquet') as response:
         assert response.status_code==200
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-            assert json.loads(archive.read('manifest.json'))['schema_version']==9
+            assert json.loads(archive.read('manifest.json'))['schema_version']==10
             rows=pq.read_table(pa.BufferReader(archive.read('model_attempts.parquet'))).to_pylist()
             assert rows[-1]['endpoint']=='openrouter' and rows[-1]['cost']==.0003
             assert rows[-1]['reasoning_tokens']==0

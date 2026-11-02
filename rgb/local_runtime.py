@@ -20,6 +20,7 @@ from common.geometry import bounds, iou
 from rgb.camera import CameraUnavailable, FrameExpired, depth_summary, jpg, png
 from rgb.enrichment import SCHEMA, validate_readings
 from rgb.local_store import encode
+from rgb.object_volume import estimate_objects
 from rgb.store import detection_id, now
 from rgb.vlm_providers import (BedrockProvider, OpenRouterProvider, ProviderError, ReviewProvider, ReviewRequest,
                                MODELS, provider_catalog, IMPLEMENTATION_SHA256 as PROVIDER_IMPLEMENTATION_SHA256)
@@ -148,7 +149,10 @@ class LocalRuntime:
                         self.material_comparison=None
                         self.material_comparison_images.clear()
                 settings=self.store.settings();model.threshold=settings['detector_threshold']
-                detections,milliseconds=model.detect(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR))
+                detections,milliseconds=model.detect(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR),
+                    with_masks=self.camera.backend=='orbbec' and frame.depth_native is not None)
+                metrology=self._measure_volumes(frame,detections,model.instance_masks)
+                if metrology is not None and model.mask_error:metrology['mask_error']=model.mask_error
                 tracker.update(detections,frame.metadata['received_monotonic_s'])
                 for d in detections:
                     if frame.depth_registered is not None:d['depth']=depth_summary(frame.depth_registered,d['box'],frame.metadata.get('registered_depth_scale_mm',frame.metadata['depth_scale_mm']))
@@ -166,13 +170,18 @@ class LocalRuntime:
                         'detections':detections,'detector_ms':milliseconds,
                         'detector':{'model':self.model_manifest['model'],'sha256':model.sha256,'threshold':model.threshold,
                                     'settings_version':settings['version'],'config':{**model.config,'depth_basis':'box_roi'}}}
+                if metrology is not None:
+                    result['metrology']=metrology
+                    result['detector']['config'].update(volume_basis='native_depth_instance_mask',volume_method_version=1)
                 if self.local_materials:
                     with self.material_condition:
                         self.material_pending=(frame,[dict(d) for d in detections],copy.deepcopy(result['detector']))
                         self.material_condition.notify_all()
                 with self.camera.condition:
                     self.camera.latest_detection=(frame,result)
-                    self.camera.detector_status.update(state='running',error=None,detector_ms=milliseconds,frame_id=frame.id,count=len(detections))
+                    self.camera.detector_status.update(state='running',error=None,detector_ms=milliseconds,
+                        metrology_ms=metrology['elapsed_ms'] if metrology else None,
+                        frame_id=frame.id,count=len(detections))
             except CameraUnavailable:
                 tracker=Tracker(continuous=True);tracking_context=None
                 with self.readings_lock:self.live_readings.clear()
@@ -180,6 +189,13 @@ class LocalRuntime:
             except Exception as exc:
                 self.camera.detector_status.update(state='unavailable',error=f'{type(exc).__name__}: {str(exc)[:250]}')
                 self.stop_event.wait(1)
+
+    def _measure_volumes(self,frame,detections,masks):
+        # RGB-only sources never acquire a volume field or mask workload.
+        if self.camera.backend!='orbbec':return None
+        volumes,summary=estimate_objects(frame,detections,masks)
+        for detection,volume in zip(detections,volumes):detection['volume']=volume
+        return summary
 
     def _attach_material(self,frame,detection):
         with self.material_lock:cached=self.material_cache.get(detection['track_id'])
@@ -229,6 +245,7 @@ class LocalRuntime:
                 'material':{key:copy.deepcopy(reading.get(key)) for key in
                     ['status','label','best_candidate','score','similarity','margin','score_type',
                      'candidates','policy','model','manifest_sha256','source_frame_id','source_box']}})
+            if 'volume' in detection:comparison_rows[-1]['volume']=copy.deepcopy(detection['volume'])
             with self.material_lock:
                 self.material_cache[detection['track_id']]={'reading':reading,'source_box':detection['box'],
                     'session_id':frame.metadata['session_id'],'calibration_sha256':frame.metadata['calibration_sha256'],
@@ -355,6 +372,7 @@ class LocalRuntime:
                    'observed_at':frame.metadata['received_at'],'received_at':now(),'location':None,
                    'detector':result['detector'],'detections':detections,
                    'frame_metadata':frame.metadata,'sensor_assets':sensors,'calibration_asset':calibration,'metadata_asset':metadata}
+            if 'metrology' in result:event['metrology']=copy.deepcopy(result['metrology'])
             event['runtime_config']={**self.configuration,'archive_interval_s':self.store.settings()['capture_interval_s']}
             location=self.store.location_at(event['source_id'],event['observed_at'])
             if location:event.update(location=location['label'] or None,location_kind=location['method'],location_record=location)

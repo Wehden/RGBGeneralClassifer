@@ -157,7 +157,7 @@ def test_local_material_evidence_survives_archive_queries_and_typed_exports(loca
     assert store.get(event['event_id'])['detections'][0]['display_label']=='plastic'
     response=app.test_client().get('/api/review/export/parquet')
     with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-        assert json.loads(archive.read('manifest.json'))['schema_version']==9
+        assert json.loads(archive.read('manifest.json'))['schema_version']==10
         rows=pq.read_table(pa.BufferReader(archive.read('material_readings.parquet'))).to_pylist()
         assert rows[0]['provider']=='siglip2' and rows[0]['confidence'] is None
         assert rows[0]['similarity']==.38 and rows[0]['accepted'] is True
@@ -196,7 +196,7 @@ def test_local_material_evidence_and_provider_audit_survive_shared_review(openro
     assert store.get(event['event_id'])['detections'][0]['label_provider']=='siglip2'
     with app.test_client().get('/api/review/export/arrow') as response:
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
-            assert json.loads(archive.read('manifest.json'))['schema_version']==9
+            assert json.loads(archive.read('manifest.json'))['schema_version']==10
             attempts=pa.ipc.open_file(pa.BufferReader(archive.read('model_attempts.arrow'))).read_all().to_pylist()
             assert attempts[-1]['endpoint']==provider and attempts[-1]['outcome']=='success'
             assert attempts[-1]['ordered_image_sha256']==attempts[0]['ordered_image_sha256']

@@ -22,12 +22,13 @@ test('records keep camera names and distinguish local similarity from VLM confid
       score:.93,score_type:'supervised_material_head_score'}},
   ];
   const context=vm.createContext({
-    document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},
+    window:{},document:{getElementById:id=>{if(!nodes.has(id))nodes.set(id,new Element('div'));return nodes.get(id);},
       createElement:tag=>new Element(tag)},
     fetch:async url=>({ok:true,json:async()=>url==='/api/sources'?
       [{id:'femto-bolt',label:'Attached camera'}]:{records,next_cursor:null,queried_at:base.observed_at}}),
     URLSearchParams,navigator:{},location:{origin:'http://127.0.0.1:8080'},
   });
+  vm.runInContext(fs.readFileSync('rgb/static/volume.js','utf8'),context);
   vm.runInContext(fs.readFileSync('rgb/static/records.js','utf8'),context);
   await new Promise(setImmediate);
   const rows=nodes.get('rows').children;
@@ -39,4 +40,6 @@ test('records keep camera names and distinguish local similarity from VLM confid
   assert.equal(rows[1].children[4].textContent,'Local: plastic · similarity 0.380 (uncalibrated)');
   assert.equal(rows[2].children[4].textContent,'Local: glass · learned score 0.930 (appearance estimate)');
   assert.equal(rows[0].children[6].children[0].href,'/#event/scene');
+  assert.equal(rows[0].children.length,7);
+  assert.equal(nodes.get('volume-column').hidden,true);
 });

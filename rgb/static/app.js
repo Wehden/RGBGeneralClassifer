@@ -95,7 +95,7 @@ async function show(id, refresh=false) {
     const event = await get(`/api/events/${id}`); if (selected !== id) return;
     if (refresh && reviewIsEditing(target)) { const state=target.querySelector('.analysis-state'); if(state)state.textContent=`Analysis: ${event.analysis.status.replaceAll('_',' ')} · Review held while editing`;detailTimer=setTimeout(()=>show(id,true),3000);return; }
     target.replaceChildren(); const frame = element('div',undefined,'evidence-image'); const img = element('img'); img.src = `/api/events/${id}/image.jpg`; img.alt = 'Archived camera observation'; frame.append(img);
-    event.detections.forEach((d,i) => { const b = element('span',undefined,'box'); b.style.top = `${d.box[0]*100}%`; b.style.left = `${d.box[1]*100}%`; b.style.height = `${(d.box[2]-d.box[0])*100}%`; b.style.width = `${(d.box[3]-d.box[1])*100}%`; b.append(element('span',`${i+1}. ${d.display_label}`)); frame.append(b); });
+    event.detections.forEach((d,i) => { const b = element('span',undefined,'box'); b.style.top = `${d.box[0]*100}%`; b.style.left = `${d.box[1]*100}%`; b.style.height = `${(d.box[2]-d.box[0])*100}%`; b.style.width = `${(d.box[3]-d.box[1])*100}%`; b.append(element('span',`${i+1}. ${d.display_label}${d.volume?' · '+window.RGBVolume.overlay(d.volume):''}`)); frame.append(b); });
     target.append(frame,element('h3',date(event.observed_at)),element('p',`${sourceLabel(event.source_id,event.frame_metadata)}${event.location?' · '+event.location:''}`,'muted'));
     const state = event.analysis; const progress = state.total_boxes ? ` · ${state.completed_boxes}/${state.total_boxes} boxes` : '';
     target.append(element('p',`Analysis: ${state.status.replaceAll('_',' ')}${progress}`,'analysis-state'));
@@ -120,6 +120,12 @@ async function show(id, refresh=false) {
         if(m.crop_asset){const crop=element('details');crop.append(element('summary','Material classifier crop'));const img=element('img');img.src=`/api/events/${id}/assets/material_crop_${i}`;img.alt='RGB crop used by SigLIP2';img.className='sensor-preview';crop.append(img,element('p',`Read from frame ${m.source_frame_id} · ${m.model}`,'muted'));card.append(crop);}
       }
       if (d.depth) card.append(element('p',d.depth.median_m == null ? `Depth: insufficient valid samples (${d.depth.valid_samples})` : `Box depth: ${d.depth.median_m.toFixed(3)} m median · ${(d.depth.valid_fraction*100).toFixed(1)}% valid · ROI may include background`,'muted'));
+      if(d.volume) {
+        card.append(element('p',`Volume: ${window.RGBVolume.compact(d.volume)}`,'comparison'));
+        const geometry=element('details');geometry.append(element('summary','Volume quality and assumptions'));
+        for(const line of window.RGBVolume.details(d.volume).slice(1))geometry.append(element('p',line,'muted'));
+        card.append(geometry);
+      }
       if (event.settings.display_mode === 'materials' && c?.materials) { for (const m of c.materials) { card.append(element('p',`${m.label} · ${(m.confidence*100).toFixed(1)}%`,'comparison'),element('p',m.reason)); } }
       if (c && event.settings.display_mode !== 'materials') { card.append(element('p',`${d.label} → ${c.label} · ${c.comparison}`,'comparison'),element('p',c.reason)); if (!d.enhancement_accepted) card.append(element('p',`VLM ${(c.confidence*100).toFixed(1)}% · threshold ${(event.settings.vlm_threshold*100).toFixed(0)}%`,'muted')); }
       const details = element('details'); const summary = element('summary','Detection history'); const content = element('div',undefined,'detection-history'); details.append(summary,content); details.open = openedHistories.has(d.detection_id);

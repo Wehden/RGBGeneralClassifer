@@ -10,6 +10,7 @@ class Element{
 function setup(){
   const context=vm.createContext({window:{},document:{createElement:tag=>new Element(tag)},
     setTimeout,clearTimeout,AbortController});
+  vm.runInContext(fs.readFileSync('rgb/static/volume.js','utf8'),context);
   vm.runInContext(fs.readFileSync('rgb/static/comparison.js','utf8'),context);
   const panel=new Element('details'),content=new Element('div'),status=new Element('p'),images=[];
   const viewer=new context.window.RGBComparison.Viewer(panel,content,status,{
@@ -69,4 +70,19 @@ test('a camera reset clears the previous image and table while waiting for new s
   assert.equal(viewer.currentFrame,null);
   assert.match(status.textContent,/waiting for scored boxes/);
   viewer.stop();
+});
+test('volume is hidden for RGB-only snapshots and conditional estimates retain their wording',()=>{
+  const data=snapshot();
+  // Exercise the public table builder independently of image transport.
+  const context=vm.createContext({window:{},document:{createElement:tag=>new Element(tag)}});
+  for(const file of ['volume','comparison'])vm.runInContext(fs.readFileSync(`rgb/static/${file}.js`,'utf8'),context);
+  let table=context.window.RGBComparison.rowsTable(data);
+  assert.equal(table.children[0].children[0].children.length,6);
+  data.rows[0].volume={status:'conditional_estimate',method:'upright_cylinder',estimate_m3:.000388};
+  table=context.window.RGBComparison.rowsTable(data);
+  assert.equal(table.children[0].children[0].children.length,7);
+  assert.equal(table.children[1].children[0].children[6].textContent,'~388 mL · cylinder estimate');
+  data.rows[0].volume={status:'insufficient_depth',estimate_m3:null};
+  table=context.window.RGBComparison.rowsTable(data);
+  assert.equal(table.children[1].children[0].children[6].textContent,'Unavailable · insufficient depth');
 });

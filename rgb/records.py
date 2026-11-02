@@ -61,6 +61,7 @@ def query(store, args):
                               camera_name=raw.get('frame_metadata',{}).get('device',{}).get('name'),
                               calibration_sha256=raw.get('frame_metadata',{}).get('calibration_sha256'),
                               sensor_assets=raw.get('sensor_assets'))
+            if 'volume' in d:result[-1]['volume']=d['volume']
             if len(result)==limit:
                 return {'records':result,'next_cursor':last,'queried_at':now(),'settings':settings}
     return {'records':result,'next_cursor':last if len(scenes)>500 else None,'queried_at':now(),'settings':settings}
@@ -71,9 +72,9 @@ def download(records, format):
     import pyarrow.parquet as pq
     material=pa.struct([('label',pa.string()),('confidence',pa.float64()),('reason',pa.string())])
     schema=pa.schema([(key,pa.string()) for key in ['detection_id','observation_id','track_id','source_id','location','detector_model','detector_sha256','detector_config_json']]+[('observed_at',pa.timestamp('us',tz='UTC')),('box',pa.list_(pa.float64(),4)),('initial_label',pa.string()),('initial_label_kind',pa.string()),('initial_class_id',pa.int32()),('initial_confidence',pa.float64()),('enhanced_label',pa.string()),('enhanced_confidence',pa.float64()),('display_label',pa.string()),('display_confidence',pa.float64()),('display_mode',pa.string()),('materials',pa.list_(material)),('model',pa.string()),('attempt_id',pa.string()),('analysis_status',pa.string())])
-    from rgb.export import DEPTH
-    schema=pa.schema(list(schema)+[('frame_id',pa.string()),('session_id',pa.string()),('camera_name',pa.string()),('calibration_sha256',pa.string()),('depth',DEPTH),('sensor_assets_json',pa.string()),('local_material_json',pa.string())])
-    rows=[{**r,'observed_at':datetime.fromisoformat(r['observed_at']),'sensor_assets_json':json.dumps(r['sensor_assets']) if r.get('sensor_assets') else None,'local_material_json':json.dumps(r['local_material']) if r.get('local_material') else None} for r in records]
+    from rgb.export import DEPTH, VOLUME
+    schema=pa.schema(list(schema)+[('frame_id',pa.string()),('session_id',pa.string()),('camera_name',pa.string()),('calibration_sha256',pa.string()),('depth',DEPTH),('volume',VOLUME),('volume_json',pa.string()),('sensor_assets_json',pa.string()),('local_material_json',pa.string())])
+    rows=[{**r,'observed_at':datetime.fromisoformat(r['observed_at']),'volume_json':json.dumps(r['volume'],sort_keys=True) if r.get('volume') else None,'sensor_assets_json':json.dumps(r['sensor_assets']) if r.get('sensor_assets') else None,'local_material_json':json.dumps(r['local_material']) if r.get('local_material') else None} for r in records]
     table=pa.Table.from_pylist(rows,schema=schema)
     out=io.BytesIO()
     if format=='parquet':pq.write_table(table,out,compression='zstd')

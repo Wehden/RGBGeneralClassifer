@@ -100,3 +100,30 @@ def test_tracking_and_display_do_not_mutate_raw_proposals(client,event):
     repaired=observation_payload(original)
     assert set(repaired['detector_proposals'][0])=={'class_id','label','confidence','box'}
     assert 'track_id' in json.loads(original)['detector_proposals'][0]
+
+
+@pytest.mark.parametrize('backend',['onnxruntime','openvino'])
+def test_instance_masks_remain_aligned_when_a_selected_mask_has_bad_coefficients(backend):
+    model=object.__new__(Detector)
+    model.backend=backend
+    model.size=32;model.labels=['cup','chair'];model.threshold=.4;model.input_name='images'
+    output=np.zeros((1,3,38),np.float32)
+    output[0,:,:6]=[[0,0,16,16,.8,0],[16,16,32,32,.3,1],[16,16,32,32,.9,1]]
+    output[0,0,6]=float('nan')
+    output[0,2,6]=1.
+    prototypes=np.ones((1,32,8,8),np.float32)
+    model.session=Mock()
+    if backend=='onnxruntime':
+        model.session.run.return_value=[output,prototypes]
+    else:
+        model.output_port='boxes'
+        model.session.outputs=['boxes','masks']
+        model.session.output.return_value='masks'
+        model.session.return_value={'boxes':output,'masks':prototypes}
+    found,_=model.detect(np.zeros((32,32,3),np.uint8),with_masks=True)
+    assert [d['label'] for d in found]==['cup','chair']
+    assert model.instance_masks[0] is None
+    assert model.instance_masks[1].dtype==np.bool_
+    assert model.instance_masks[1][20,20] and not model.instance_masks[1][5,5]
+    assert all(set(d)=={'class_id','label','confidence','box'} for d in found)
+    assert all(set(d)=={'class_id','label','confidence','box'} for d in model.proposals)

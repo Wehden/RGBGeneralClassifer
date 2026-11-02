@@ -1,4 +1,4 @@
-"""Experimental YOLOE mask decoding; no change to the live detector contract."""
+"""YOLOE mask decoding shared by live estimates and offline experiments."""
 import math
 
 import cv2
@@ -7,7 +7,7 @@ import numpy as np
 from board.yoloe import decode
 
 
-def instances(output, prototypes, labels, shape, transform, threshold=.45):
+def instances(output, prototypes, labels, shape, transform, threshold=.45, *, row_indices=None):
     """Decode original-image masks with Ultralytics' native scaling convention."""
     if output.ndim != 3 or output.shape[0] != 1 or output.shape[2] != 38:
         raise ValueError('Mask coefficients require [1,N,38] detections')
@@ -22,6 +22,8 @@ def instances(output, prototypes, labels, shape, transform, threshold=.45):
     factor = 4 // math.gcd(4, pad | pad // 2)
     found = []
     for row_index, row in enumerate(output[0]):
+        if row_indices is not None and row_index not in row_indices:
+            continue
         readings = decode(row[None, None], labels, shape, transform, threshold)
         if not readings or not np.isfinite(row[6:]).all():
             continue

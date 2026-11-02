@@ -37,6 +37,8 @@ jobs:
           node --check rgb/static/records.js
           node --check rgb/static/pointcloud.js
           node --check rgb/static/live-video.js
+          node --check rgb/static/volume.js
+          node --check rgb/static/comparison.js
       - name: Test browser behavior
         run: node --test tests/js/*.test.cjs
       - name: Install browser test dependencies

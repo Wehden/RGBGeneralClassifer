@@ -44,3 +44,40 @@ changes belong in separate ablations. Do not choose runs using the historical
 test, whose errors have already been inspected.
 The run records the camera validation reference count and the actual public
 and camera objective weights to make this fallback visible.
+
+## CPU head screening
+
+Use `--stage head` to run the same 401-step frozen-encoder classifier training,
+initialization, duplicate purge, weighting and checkpoint selection without
+loading or fine-tuning the encoder. The cached feature files and pinned feature
+manifest must already be present in the output directory. Only validation
+predictions are computed for evaluation; historical test predictions and
+metrics are absent from this stage.
+
+The stage writes `head-state.pt` (a CPU classifier state dictionary),
+`head-results.json` (validation metrics, calibration, classifier checksum and
+dataset/feature/training provenance), and `head-validation-logits.npz` with
+matching `head-validation-rows.json`. These files support a later export after
+verification; the head stage does not create or deploy an inference artifact.
+The normal `--stage train` still trains and exports both variants.
+
+## Preregistered review exclusions
+
+`--review-manifest PATH` applies training exclusions in memory without editing
+teacher labels, dataset files or heldout splits. The JSON manifest must contain:
+
+```json
+{
+  "schema_version": 1,
+  "labels_sha256": "<SHA256 of original teacher-labels.json>",
+  "dataset_sha256": "<SHA256 of original dataset.json>",
+  "excluded_training_ids": ["<original training sample ID>"]
+}
+```
+
+Unknown IDs, duplicate exclusions, heldout exclusions and mismatched original
+hashes are errors. Optional `source_labels_sha256`/`source_dataset_sha256`
+aliases must match; when an `actions` list is present, its `exclude` actions
+must match the exclusion list exactly. Validation `flag` actions remain
+diagnostic. The manifest checksum and exact exclusions enter run provenance.
+Review exclusions never become new heldout references for the duplicate purge.

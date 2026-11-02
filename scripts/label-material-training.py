@@ -34,13 +34,27 @@ def jpeg(image):
     return stream.getvalue()
 
 
-def prepare(directory):
+def sample_batches(rows,unique_groups=False):
+    """Keep paired variants out of the same request when explicitly requested."""
+    remaining=list(rows)
+    while remaining:
+        batch,rest,groups=[],[],set()
+        for row in remaining:
+            group=row.get('group_id',row['id'])
+            if len(batch)<4 and (not unique_groups or group not in groups):
+                batch.append(row);groups.add(group)
+            else:
+                rest.append(row)
+        yield batch
+        remaining=rest
+
+
+def prepare(directory,preserve_crop_jpeg=False,unique_groups=False):
     dataset = json.loads((directory/'dataset.json').read_text())
     batches = []
     evidence = directory/'teacher-evidence'
     evidence.mkdir(exist_ok=True)
-    for start in range(0,len(dataset['entries']),4):
-        rows = dataset['entries'][start:start+4]
+    for rows in sample_batches(dataset['entries'],unique_groups):
         images = []
         batch_id = f'batch-{len(batches):03}'
         for index,row in enumerate(rows):
@@ -54,10 +68,14 @@ def prepare(directory):
             draw.text((x1,max(0,y1-22)),str(index),fill='#ff2d55',font_size=18)
             scene.thumbnail((768,768))
             with Image.open(directory/row['file']) as source:
+                if preserve_crop_jpeg and (
+                        source.format!='JPEG' or source.mode!='RGB' or max(source.size)>512):
+                    raise ValueError('Exact crop evidence requires RGB JPEG at most 512 pixels')
                 crop=source.convert('RGB');crop.thumbnail((512,512))
             for kind,image in [('scene',scene),('crop',crop)]:
                 path=evidence/f'{batch_id}-{index}-{kind}.jpg'
-                content=jpeg(image)
+                content=((directory/row['file']).read_bytes()
+                         if kind=='crop' and preserve_crop_jpeg else jpeg(image))
                 if path.exists() and path.read_bytes()!=content:
                     raise ValueError('Teacher image encoding changed')
                 path.write_bytes(content)
@@ -67,6 +85,10 @@ def prepare(directory):
                         'prompt':label_prompt(len(rows)),'images':images})
     manifest={'dataset_sha256':digest(directory/'dataset.json'),'protocol_sha256':protocol_hash(),
               'system':SYSTEM,'model':PRIMARY_MODEL,'profile':'default','region':'us-west-2','batches':batches}
+    if preserve_crop_jpeg:
+        manifest['crop_encoding']='exact-source-jpeg'
+    if unique_groups:
+        manifest['batching']='at-most-one-sample-per-object-group-per-request'
     path=directory/'teacher-manifest.json'
     if path.exists() and json.loads(path.read_text())!=manifest:
         raise ValueError('Teacher protocol/dataset changed; use a new run directory')
@@ -110,8 +132,8 @@ def collect(directory,dataset,manifest):
     return summary
 
 
-def run(directory,invoke,maximum):
-    dataset,manifest=prepare(directory)
+def run(directory,invoke,maximum,preserve_crop_jpeg=False,unique_groups=False):
+    dataset,manifest=prepare(directory,preserve_crop_jpeg,unique_groups)
     requests=directory/'teacher-requests';requests.mkdir(exist_ok=True)
     provider=BedrockProvider(profile='default',region='us-west-2',read_timeout=90)
     calls=0
@@ -148,5 +170,10 @@ if __name__ == '__main__':
     parser.add_argument('--dataset-dir',type=Path,required=True)
     parser.add_argument('--invoke-bedrock',action='store_true')
     parser.add_argument('--max-calls',type=int,default=128)
+    parser.add_argument('--preserve-crop-jpeg',action='store_true',
+                        help='Send the exact source JPEG consumed by the student (RGB, <=512px)')
+    parser.add_argument('--unique-groups-per-batch',action='store_true',
+                        help='Keep paired variants of an object in separate teacher requests')
     args=parser.parse_args()
-    print(json.dumps(run(args.dataset_dir,args.invoke_bedrock,args.max_calls),indent=2))
+    print(json.dumps(run(args.dataset_dir,args.invoke_bedrock,args.max_calls,
+                         args.preserve_crop_jpeg,args.unique_groups_per_batch),indent=2))

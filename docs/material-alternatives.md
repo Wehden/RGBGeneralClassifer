@@ -1,0 +1,229 @@
+# Local material alternatives: validation probes and research
+
+2026-11-02. This compares alternative classifiers before adopting a larger
+encoder. Recognition and rejection are the decision criteria. Execution
+cost remains a feasibility measurement.
+
+## Frozen-feature probes
+
+Seventy-eight candidates reuse the original pinned SigLIP2 base/384 normalized
+embeddings: class prototypes, weighted nearest-neighbor voting and
+regularized linear regression, across six training-weight configurations.
+Camera target materials and camera rejection samples are separate cohorts;
+explicit cohort weights use class-balanced, teacher-weighted training samples.
+Legacy weighting and a public-only control are included.
+
+All fitting statistics come from training rows. Selection uses validation
+only and the original objective of 70% annotated MINC top-choice accuracy
+plus 30% camera weak-label agreement. No historical test predictions are
+computed. This is exploratory validation screening across multiple
+configurations; a fresh holdout is still needed for confirmation.
+
+| Validation-selected candidate | MINC correct / 200 | Camera correct / 12 | Camera class-macro | Original objective |
+|---|---:|---:|---:|---:|
+| Existing fine-tuned model | 156 | 7 | 50.0% | **0.7210** |
+| Frozen-feature ridge, legacy weights, lambda 0.0001 | 155 | 7 | 50.0% | 0.7175 |
+| Frozen-feature ridge, camera-material 20%, rejection 10%, lambda 0.001 | 154 | 7 | 50.0% | 0.7140 |
+| Frozen-feature ridge, camera-material 40%, rejection 20%, lambda 0.001 | 147 | 8 | 55.6% | 0.7145 |
+| Public-only ridge, lambda 0.0001 | 155 | 6 | 33.3% | 0.6925 |
+| Best class-prototype configuration | 125 | 5 | 38.9% | 0.5625 |
+| Best weighted-neighbor configuration | 134 | 4 | 33.3% | 0.5690 |
+
+These results do not establish a better replacement for the deployed model.
+Extra camera weight can increase camera agreement at the expense of public
+category accuracy. The best ridge head nearly matches the fine-tuned model
+using its original frozen encoder, but does not beat the selection objective.
+Prototypes and nearest neighbors perform worse.
+
+Camera validation contains only nine fabric and three plastic references.
+Those are weak VLM labels from a few office sessions, not independently
+verified composition. A one-reference gain is too small and too narrow to
+claim broader camera improvement. The probes report top-three, class-macro,
+approximate-group macro and rejection-reference results separately.
+
+Run:
+
+```bash
+OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 .venv-models/bin/python \
+  scripts/probe-material-alternatives.py \
+  --run-directory /private/material-training/output \
+  --output /private/material-probes.json
+```
+
+The private initial receipt is
+`~/.local/state/bolt-rgb/material-alternatives-2026-11-02/probe-results.json`.
+It records all candidates, source hashes and the source-code hash.
+Five regression tests cover cohort mass, training-only statistics,
+separable reference classes and validation-only evaluation.
+These heads are not exported or activated.
+
+## Encoder and material-specific shortlist
+
+| Technique | Why evaluate it | Current evidence / constraints |
+|---|---|---|
+| DINOv2 ViT-S/14, frozen CLS and mean-patch features | Self-supervised visual representations provide a different inductive bias; compare pooled object semantics with surface/patch evidence | Official small checkpoint is ungated, Apache-2.0 and about 88.25 MB FP32; tested below |
+| Surface-patch or foreground-patch SigLIP2 pooling | Reduce background and object-category influence while retaining the existing encoder | Requires teacher labels corresponding to the exact student pixels and a fresh object holdout |
+| DINOv3 ViT-S/16 dense features | Newer dense-feature encoder; official small model has 21M parameters | Official HF checkpoint is manually gated and code/weights use the custom DINOv3 License; no download or acceptance of terms performed |
+| Published MINC-specialist GoogLeNet/VGG/AlexNet models | Directly trained for 23 material categories and dense material recognition | Authors provide a 714 MB archive and report 85.2% mean-class MINC accuracy for GoogLeNet; Caffe integration, label mapping, model-license details and pretraining overlap need verification before a fair comparison |
+| OpenCLIP checkpoints | Different contrastive pretraining is a possible alternative | Library code is MIT; each checkpoint's own license/provenance must be checked. No evidence yet that scaling another generic encoder improves this camera task |
+
+The practical new-encoder candidate is DINOv2 small. Its weight storage fits
+comfortably within the NUC's memory budget, but CPU inference behavior,
+export parity, material utility and rejection must still be measured.
+Desktop CPU containers can extract its features if the GPU is unavailable.
+A visual encoder alone does not provide material labels: fit a supervised
+head against reviewed targets, then calibrate on validation.
+
+The separate DINOv2 extractor pins the source revision and downloads only
+its configuration, processor configuration and safetensors weights:
+
+```bash
+.venv-models/bin/python scripts/cache-dinov2-material-features.py cache
+```
+
+Mount the returned snapshot directory and private dataset read-only in the
+existing training container. Run extraction with network access disabled:
+
+```bash
+python scripts/cache-dinov2-material-features.py extract \
+  --source-directory /models/ed25f3a31f01632728cabb09d1542f84ab7b0056 \
+  --data /private/material-training/dataset \
+  --rows /private/train-validation-rows.json \
+  --output /private/dinov2-features --device cpu --batch-size 16
+```
+
+This validates sample hashes and writes separate normalized CLS and mean
+patch features with a source/processor receipt. This round excludes historical
+test rows before extraction. The canonical processor resizes and
+center-crops, which can discard parts of thin objects. Processor behavior
+must be recorded when comparing encoders. This is an experiment extractor,
+not a console-compatible exported material classifier.
+
+Use the original selected sample rows across encoders, retaining only rows
+whose original split is `train` or `validation`. The original SigLIP2 dataset
+already excluded three near-duplicate references; retain those exclusions.
+Do not apply an additional
+DINO-specific similarity purge: changing the sample selection would confound
+the encoder comparison. Frozen-feature extraction introduces no new labels.
+
+Each pooling result can be probed independently without copying baseline
+logits or rearranging the feature cache:
+
+```bash
+OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 python \
+  scripts/probe-material-alternatives.py \
+  --run-directory /private/material-training/output \
+  --feature-file /private/dinov2-features/cls-features.npz \
+  --rows-file /private/train-validation-rows.json \
+  --skip-baselines --output /private/dinov2-cls-probes.json
+```
+
+Repeat using `mean_patch-features.npz`. Explicit row overrides accept only
+training and validation rows; legacy runs retain their historical-row cache
+without predicting on it. Receipts record hashes and actual source paths
+privately. Review both complete 78-candidate screens as exploratory
+validation evidence, then confirm any selected improvement on fresh objects.
+
+### Measured DINOv2 results
+
+Both normalized CLS and mean-patch representations were extracted in the
+existing offline training container. The comparison retains 1,360 originally
+selected train/validation rows, with no new labels or model-specific purge.
+The extraction receipt also covers three already-excluded rows; a retained
+projection receipt binds their removal to the original split assignments.
+Each pooling variant was screened over all 78 probe configurations.
+
+| Best validation-selected DINOv2 probe | MINC correct / 200 | Camera correct / 12 | Camera top-three | Objective |
+|---|---:|---:|---:|---:|
+| CLS, ridge, camera 40%, rejection 10%, lambda 0.01 | 119 | 6 | 66.7% | 0.5665 |
+| Mean patches, ridge, camera 40%, rejection 10%, lambda 0.001 | 148 | 6 | 83.3% | 0.6680 |
+
+Mean patches are stronger than CLS on this material task, but neither
+representation beats SigLIP2's deployed fine-tuned objective of 0.7210.
+This is a frozen-small-encoder comparison with canonical preprocessing;
+it does not rule out a different DINO fine-tune, resolution or foreground
+patch protocol. There is no evidence here to switch the console encoder.
+
+### Matched 384px follow-up
+
+The extractor now supports `--crop-mode siglip384` and
+`--model-size small|base|large`. This matches SigLIP2's full crop geometry:
+RGB conversion and PIL bicubic resizing to 384×384 before source DINOv2
+normalization, with processor resizing and centre cropping disabled.
+Effective input dimensions, patch-grid boundary, token count, parameter count,
+source file size and CUDA allocated/reserved memory are recorded.
+Nonempty output directories are rejected to protect earlier measurements.
+
+| Mean-final-patch representation, best objective-selected probe | MINC correct / 200 | Camera correct / 12 | Objective |
+| --- | ---: | ---: | ---: |
+| Small, 384 square | 146 | 5 | 0.6360 |
+| Base, 384 square | 151 | 6 | 0.6785 |
+| Large, 384 square | 139 | 8 | 0.6865 |
+
+Small does not improve over its canonical 224 result. Larger models can
+gain camera matches with a public-data tradeoff. The base CLS result is
+120/200 and 9/12; class-macro camera agreement is 61.1%. The weak camera set
+has nine fabric and three plastic references, so always predicting fabric
+already obtains 9/12 raw agreement. No frozen DINOv2 configuration beats
+the original frozen SigLIP2 ridge objective, 0.7175.
+
+Memory does not block desktop inference: at batch16/FP32, small/base/large
+peak allocated VRAM is 0.36/0.83/1.80 GiB, respectively. Large reserves
+1.98 GiB on the 23 GiB A10G. Training and NUC inference are separate,
+unmeasured memory questions for the larger encoders.
+
+Pinned additions, verified as ungated Apache-2.0 checkpoints on 2026-11-02:
+
+- `facebook/dinov2-base`, revision `f9e44c814b77203eaa57a6bdbbd535f21ede1415`.
+- `facebook/dinov2-large`, revision `47b73eefe95e8d44ec3623f8890bd894b6ea2d6c`.
+
+For example, preload base's public snapshot on the training host, then use
+that pinned snapshot in a network-disabled extraction container:
+
+```bash
+python scripts/cache-dinov2-material-features.py cache --model-size base
+python scripts/cache-dinov2-material-features.py extract \
+  --model-size base --crop-mode siglip384 \
+  --source-directory /models/f9e44c814b77203eaa57a6bdbbd535f21ede1415 \
+  --data /private/material-training/dataset \
+  --rows /private/train-validation-rows.json \
+  --output /private/dinov2-base-384 --device cuda --batch-size 16
+```
+
+Run the same CLS/mean-patch probe commands against these new feature files.
+Keep all samples and head configurations fixed. DINOv2's stride14 grid
+consumes 378×378 pixels of the 384 input; the final six bottom/right rows
+are outside its valid convolution support. This does not prevent 384
+inference, and is recorded rather than hidden by another processor crop.
+See `material-round2.md` for the full comparison and hardware measurements.
+
+The historical MINC control cannot automatically be treated as a clean
+holdout for a published MINC-specialist model; training-image overlap may
+exist. Published paper accuracy is not a result on our captures.
+Depth can help isolate surfaces/foreground, but the Femto Bolt's depth/IR
+channels do not by themselves identify physical composition.
+
+## Primary sources
+
+The following primary sources were checked on 2026-11-02. Copies and model
+metadata are retained privately beside the probe receipt.
+
+- DINOv2 authors' code and license:
+  `https://github.com/facebookresearch/dinov2`
+  `https://github.com/facebookresearch/dinov2/blob/main/LICENSE`
+- Official DINOv2 small checkpoint:
+  `https://huggingface.co/facebook/dinov2-small`
+  pinned revision `ed25f3a31f01632728cabb09d1542f84ab7b0056`.
+- DINOv3 authors' code, model table and license:
+  `https://github.com/facebookresearch/dinov3`
+  `https://github.com/facebookresearch/dinov3/blob/main/LICENSE.md`.
+- Official DINOv3 small checkpoint metadata:
+  `https://huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m`
+  revision `114c1379950215c8b35dfcd4e90a5c251dde0d32`.
+- MINC authors' paper, models and annotation licensing:
+  `https://opensurfaces.cs.cornell.edu/publications/minc/`.
+- OpenCLIP official implementation and license:
+  `https://github.com/mlfoundations/open_clip`
+  `https://github.com/mlfoundations/open_clip/blob/main/LICENSE`.
+- SigLIP2 authors' implementation:
+  `https://github.com/google-research/big_vision/blob/main/big_vision/configs/proj/image_text/README_siglip2.md`.

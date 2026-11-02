@@ -69,7 +69,7 @@ def main():
                 window.page.runJavaScript(script, inspected)
             timer.timeout.connect(poll)
             timer.start(200)
-            return original(application)
+            return original()
 
         QApplication.exec = controlled_exec
         sys.argv = ['rgb.desktop', '--attach', '--url', state['url'], '--software-rendering']

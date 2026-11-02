@@ -124,6 +124,28 @@ def outage():
     print('PASS real Redis outage fails closed with 503')
 
 
+def board():
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            response = requests.get('http://board:8080/healthz', timeout=3)
+            payload = response.json()
+            if response.status_code == 503 and 'No usable V4L2' in payload.get('error', ''):
+                assert payload['camera'] is None and payload['sequence'] == 0
+                assert requests.get('http://board:8080/snapshot.jpg', timeout=3).status_code == 503
+                # This endpoint closes an empty MJPEG response when no frame exists.
+                # Repeated requests also exercise real WSGI admission cleanup.
+                for _ in range(8):
+                    stream = requests.get('http://board:8080/stream', timeout=3)
+                    assert stream.status_code == 200 and stream.content == b''
+                print('PASS real board CMD and outbox initialization; absent camera stays unavailable')
+                return
+        except (requests.RequestException, ValueError):
+            pass
+        time.sleep(.2)
+    raise AssertionError('Board entry point did not start with truthful absent-camera readiness')
+
+
 if __name__ == '__main__':
     import sys
-    {'initial': initial, 'recovered': recovered, 'outage': outage}[sys.argv[1]]()
+    {'initial': initial, 'recovered': recovered, 'outage': outage, 'board': board}[sys.argv[1]]()

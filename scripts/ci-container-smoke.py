@@ -26,6 +26,7 @@ def main():
     prefix = 'rgb-ci-' + uuid4().hex[:12]
     network, volume = prefix + '-network', prefix + '-images'
     redis_name, service_name = prefix + '-redis', prefix + '-service'
+    board_name = prefix + '-board'
     token, password = secrets.token_hex(32), secrets.token_hex(32)
     if os.environ.get('GITHUB_ACTIONS'):
         print('::add-mask::' + token, flush=True)
@@ -44,6 +45,7 @@ def main():
                 f'REDIS_URL=redis://:{password}@redis:6379/0\nINGEST_TOKEN={token}\n'
                 'SOURCES_JSON={"synthetic-ci":{"location":"Synthetic CI bench"}}\n'
                 'IMAGE_DIR=/data/images\nVLM_ENDPOINTS_JSON=[]\n'
+                'ARCHIVE_URL=https://synthetic-ci.invalid\nOUTBOX_DB=/data/outbox.sqlite3\n'
                 f'CI_EVENT_ID={uuid4()}\n')
             env.chmod(0o600)
             docker('run', '--rm', '--network', 'none', '--user', '0:0',
@@ -81,12 +83,21 @@ def main():
                    '--env', 'PYTHONPATH=/app',
                    '--mount', f'type=bind,src={ROOT / "ci"},dst=/ci,readonly',
                    '--entrypoint', 'python', args.board_image, '/ci/board_contract.py')
+            # Start the image's real CMD without a camera or external connectivity.
+            docker('run', '-d', '--name', board_name, '--network', network,
+                   '--network-alias', 'board', '--env-file', env,
+                   '--tmpfs', '/data:rw,uid=1000,gid=1000,mode=0700', args.board_image)
+            info = json.loads(docker('inspect', board_name, capture=True))[0]
+            assert info['Config']['User'] == '1000:1000' and not info['HostConfig']['PortBindings']
+            phase('board')
     finally:
         reports = ROOT / 'ci-results'
         reports.mkdir(exist_ok=True)
         with (reports / 'container-service.log').open('w') as log:
             subprocess.run(['docker', 'logs', service_name], stdout=log, stderr=subprocess.STDOUT)
-        for name in [service_name, redis_name]:
+        with (reports / 'container-board.log').open('w') as log:
+            subprocess.run(['docker', 'logs', board_name], stdout=log, stderr=subprocess.STDOUT)
+        for name in [board_name, service_name, redis_name]:
             subprocess.run(['docker', 'rm', '-f', '-v', name], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL)
         for kind, name in [('volume', volume), ('network', network)]:

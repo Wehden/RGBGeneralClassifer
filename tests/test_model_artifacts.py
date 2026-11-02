@@ -95,6 +95,14 @@ def test_branch_conflict_does_not_return_a_release_receipt(artifact):
         publish(artifact, ConflictHub(), SimpleNamespace, branch='experiments/conflict')
 
 
+@pytest.mark.parametrize('branch', ['', ' ', None, ' experiments/candidate', 'experiments/candidate '])
+def test_invalid_branch_never_falls_back_to_main(artifact, branch):
+    hub = Hub()
+    with pytest.raises(ArtifactError, match='nonempty Hub branch'):
+        publish(artifact, hub, SimpleNamespace, branch=branch)
+    assert hub.lookups == [] and hub.kwargs is None
+
+
 @pytest.mark.parametrize('damage', ['corrupt', 'extra-path', 'symlink', 'missing', 'policy'])
 def test_invalid_exports_never_reach_upload(artifact, damage):
     manifest = json.loads((artifact/'manifest.json').read_text())

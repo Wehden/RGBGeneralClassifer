@@ -67,6 +67,8 @@ def validate(directory):
 
 def publish(directory, api, operation, repo=REPOSITORY, branch='main'):
     """Upload a stable, allowlisted snapshot in one optimistic commit."""
+    if not isinstance(branch, str) or not branch.strip() or branch != branch.strip():
+        raise ArtifactError('Publishing requires a nonempty Hub branch name without surrounding whitespace')
     validate(directory)
     info = api.model_info(repo, revision=branch)
     if not info.private:

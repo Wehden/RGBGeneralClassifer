@@ -9,6 +9,7 @@
   "board/yoloe.py": 45,
   "rgb/agreement.py": 91,
   "rgb/camera.py": 75,
+  "rgb/camera_devices.py": 90,
   "rgb/camera_api.py": 81,
   "rgb/capture_metrology.py": 86,
   "rgb/desktop_service.py": 83,

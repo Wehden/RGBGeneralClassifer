@@ -3,6 +3,7 @@ let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
 let archiveLoaded=false;
 let rawBitDepth={depth:16,ir:16};
+let cameraInventory=null,cameraChanging=false,cameraGeneration=0,cameraSelectionError='';
 function rawLabel(channel,bits=rawBitDepth){return `Raw ${bits[channel]??16}-bit ${channel}`;}
 const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
   new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
@@ -32,6 +33,61 @@ function syncViewIcons() {
   const selected=$('camera-channel')?.value||'color';
   for(const button of document.querySelectorAll('[data-channel]'))button.setAttribute('aria-pressed',String(button.dataset.channel===selected));
 }
+function renderCameras(catalog,force=false) {
+  const select=$('camera-select');
+  if(!select||cameraChanging)return;
+  const changed=cameraInventory&&cameraInventory.active_id!==catalog.active_id;
+  cameraInventory=catalog;
+  if(force||changed||document.activeElement!==select) {
+    select.replaceChildren(...catalog.cameras.map(camera=>{
+      const identity=camera.usb_serial||camera.serial||camera.device;
+      const option=element('option',`${camera.name}${identity?' · '+identity:''}${camera.connected?'':' · disconnected'}`);
+      option.value=camera.id;option.disabled=!camera.connected;return option;
+    }));
+    select.value=catalog.active_id;
+  }
+  const connected=catalog.cameras.filter(camera=>camera.connected);
+  const active=catalog.cameras.find(camera=>camera.id===catalog.active_id);
+  select.disabled=connected.length<2&&!(connected.length&&active&&!active.connected);
+  $('camera-selection-status').textContent=cameraSelectionError||catalog.error||
+    (catalog.state==='starting'?`Opening ${active?.name||'camera'}…`:
+      !active?.connected?'Active camera disconnected':'');
+  if(changed&&!force){cameraGeneration++;liveVideo.stop();pointcloudViewer?.stop(true);live();}
+}
+async function cameraDevices(force=false) {
+  const generation=cameraGeneration;
+  try {
+    const catalog=await get('/api/camera/devices');
+    if(generation===cameraGeneration&&!cameraChanging)renderCameras(catalog,force);
+  } catch {
+    if(generation===cameraGeneration&&!cameraChanging){
+      $('camera-select').disabled=true;
+      $('camera-selection-status').textContent='Camera list unavailable';
+    }
+  }
+}
+async function selectCamera() {
+  const cameraId=$('camera-select').value;
+  if(cameraChanging||cameraId===cameraInventory?.active_id)return;
+  cameraChanging=true;cameraGeneration++;cameraSelectionError='';
+  $('camera-select').disabled=true;
+  $('camera-selection-status').textContent='Switching camera…';
+  liveVideo.stop();pointcloudViewer?.stop(true);comparisonViewer?.select(false);
+  try {
+    const response=await fetch('/api/camera/select',{method:'POST',
+      headers:{'Content-Type':'application/json','X-RGB-Request':'camera-select'},
+      body:JSON.stringify({camera_id:cameraId})});
+    const catalog=await response.json();
+    if(!response.ok)throw new Error(catalog.error||`Camera change failed (${response.status})`);
+    cameraChanging=false;renderCameras(catalog,true);
+    renderCamera(await get('/api/camera/status'));
+  } catch(error) {
+    cameraChanging=false;cameraSelectionError=error.message;
+    await cameraDevices(true);
+  } finally {
+    cameraChanging=false;live();
+  }
+}
 function renderCamera(camera) {
   if(camera.raw_bit_depth)rawBitDepth={depth:16,ir:16,...camera.raw_bit_depth};
   const source=sources.find(s=>s.local&&s.id===$('source').value);
@@ -43,7 +99,7 @@ function renderCamera(camera) {
   if(!select)return;
   const supported=new Set(camera.views||camera.channels||[]);
   if(camera.backend==='v4l2'){supported.clear();supported.add('color');}
-  if(!supported.size)return;
+  if(!supported.size)supported.add('color');
   for(const option of select.querySelectorAll('option'))option.hidden=option.disabled=!supported.has(option.value);
   for(const button of document.querySelectorAll('[data-channel]'))button.hidden=!supported.has(button.dataset.channel);
   if($('view-switch'))$('view-switch').hidden=supported.size<2;
@@ -53,9 +109,13 @@ function renderCamera(camera) {
   syncViewIcons();
 }
 async function status() {
+  const generation=cameraGeneration;
   try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; renderDetection(s); acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
   catch { $('timing').textContent = 'Camera status unavailable'; activity('detection','unknown','Unknown'); if($('classification-toggle'))activity('capture','unknown','Unknown'); }
-  if(sources.find(s=>s.id===$('source').value)?.local){try{renderCamera(await get('/api/camera/status'));}catch{}}
+  if(sources.find(s=>s.id===$('source').value)?.local&&!cameraChanging){
+    try{const camera=await get('/api/camera/status');if(generation===cameraGeneration&&!cameraChanging)renderCamera(camera);}catch{}
+    if($('camera-select'))await cameraDevices();
+  }
 }
 function live() {
   const s = sources.find(x => x.id === $('source').value); if (!s) return;
@@ -164,6 +224,7 @@ $('save-settings').onclick=async () => { try { const r=await fetch('/api/setting
 window.addEventListener('hashchange',()=>{ const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match && match[1]!==selected) show(match[1]); });
 $('mode').onchange=async () => { const mode=$('mode').value; $('mode').disabled=true; try { const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({display_mode:mode})}); if (!r.ok) throw new Error(`Save failed (${r.status})`); settings=await r.json(); $('mode-status').textContent=`Saved revision ${settings.version}`; load(); if (selected) show(selected,true); } catch (e) { $('mode-status').textContent=e.message; $('mode').value=settings.display_mode; } $('mode').disabled=false; };
 $('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('source').onchange = live;
+if($('camera-select'))$('camera-select').onchange=selectCamera;
 (async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
 
 let vlmPaused=false,vlmChanging=false,vlmGeneration=0,modelDirty=false;

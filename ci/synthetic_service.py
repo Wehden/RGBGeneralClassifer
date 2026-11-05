@@ -1,5 +1,6 @@
 """Serve the real local console/API with synthetic frames and an isolated archive."""
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 from waitress import create_server
 
+from rgb import camera_devices
 from rgb.camera import Camera, make_frame
 from rgb.local_runtime import LocalRuntime
 from rgb.local_store import LocalStore, encode
@@ -32,7 +34,7 @@ class SyntheticMaterials:
                 'policy': {'minimum_probability': .8, 'minimum_margin': .05}}
 
 
-def make_service(directory, depth=True):
+def make_service(directory, depth=True, cameras=False):
     store = LocalStore(directory, analysis_enabled=False)
     camera = Camera(backend='orbbec' if depth else 'v4l2', freshness_s=600)
     camera.info = {'name': 'Synthetic RGB-D' if depth else 'Synthetic RGB'}
@@ -79,6 +81,40 @@ def make_service(directory, depth=True):
     runtime._material_pass(SyntheticMaterials(), frame, result['detections'], result['detector'])
     runtime._attach_material(frame, detection)
     event = runtime.archive(frame, result)
+    inventory = [{'id': backend, 'backend': backend,
+                      'name': {'orbbec': 'Synthetic Bolt', 'realsense': 'Synthetic D415', 'v4l2': 'Synthetic webcam'}[backend],
+                      'serial': backend, 'usb_serial': backend, 'device': '/dev/synthetic',
+                      'connected': True} for backend in ['orbbec', 'realsense', 'v4l2']]
+    if not cameras:
+        inventory = [item for item in inventory if item['backend'] == camera.backend]
+    camera_devices.discover = lambda: deepcopy(inventory)
+    camera.selection_id = 'orbbec' if depth else 'v4l2'
+    if cameras:
+        def select_camera(selection):
+            # Only sensor acquisition is synthetic; use the real selection API,
+            # runtime reset, immutable planes, and browser controls.
+            camera.stop_event.set()
+            camera.stop_event = threading.Event()
+            camera.backend = selection['backend']
+            camera.selection_id = selection['id']
+            camera.serial = camera.usb_serial = selection['usb_serial']
+            camera.info = {'name': selection['name']}
+            camera.session_id = str(uuid4())
+            meta = {**metadata, 'frame_id': str(uuid4()), 'session_id': camera.session_id, 'device': camera.info}
+            native_depth = plane.copy() if camera.backend != 'v4l2' else None
+            native_ir = (plane.astype(np.uint8) if camera.backend == 'realsense'
+                         else plane.copy() if native_depth is not None else None)
+            fresh = make_frame(color.copy(), native_depth, native_ir,
+                               plane.copy() if native_depth is not None else None, meta)
+            with camera.condition:
+                camera.frames.clear()
+                camera.publish(fresh)
+                selected_result = deepcopy(result)
+                selected_result.update(frame_id=fresh.id, session_id=camera.session_id)
+                if native_depth is None:
+                    for detection in selected_result['detections']: detection.pop('volume', None)
+                camera.latest_detection = (fresh, selected_result)
+        camera.select = select_camera
     app = create_app(store, sources={'femto-bolt': {'local': True}}, local_runtime=runtime)
     return app, camera, store, event
 
@@ -86,9 +122,10 @@ def make_service(directory, depth=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rgb-only', action='store_true')
+    parser.add_argument('--cameras', action='store_true')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='rgb-ci-console-') as directory:
-        app, _, _, event = make_service(directory, depth=not args.rgb_only)
+        app, _, _, event = make_service(directory, depth=not args.rgb_only, cameras=args.cameras)
         server = create_server(app, host='127.0.0.1', port=0, threads=16)
         print(json.dumps({'url': f'http://127.0.0.1:{server.effective_port}',
                           'event_id': event['event_id']}), flush=True)

@@ -89,6 +89,9 @@ The RealSense binding is included in both installer variants. Existing
 librealsense kernel drivers and firmware are managed by the destination system.
 Use the SDK-reported `--camera-serial` for device selection; the USB/ASIC serial
 can differ. Close RealSense Viewer before starting console capture.
+When multiple cameras are attached, select the active camera from the live
+preview dropdown. It switches between Bolt, RealSense, and USB webcam capture
+without restarting the service and preserves the archive and saved settings.
 The D415 supplies RGB, native uint16 depth, native uint8 left IR, and depth
 registered to the color camera for the 3D viewer.
 See [RealSense operation](local-operations.md#realsense-cameras) for calibration

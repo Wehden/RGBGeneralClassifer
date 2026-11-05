@@ -12,7 +12,7 @@ fs.mkdirSync(reports,{recursive:true});
 
 async function fixture(rgbOnly){
   const process=spawn(global.process.env.CI_PYTHON||'python3',
-    ['ci/synthetic_service.py',...(rgbOnly?['--rgb-only']:[])],
+    ['ci/synthetic_service.py',...(rgbOnly?['--rgb-only']:['--cameras'])],
     {cwd:root,stdio:['ignore','pipe','pipe']});
   let log='';
   process.stderr.on('data',chunk=>{log+=chunk;});
@@ -81,7 +81,28 @@ async function fixture(rgbOnly){
           const raw=await page.request.get(service.url+'/api/camera/depth/raw.png');
           assert.equal(raw.status(),200);
           assert.equal(raw.headers()['x-rgb-plane'],'depth_native');
+          assert.equal(await page.locator('#camera-select').isEnabled(),true);
+          assert.equal(await page.locator('#camera-select option').count(),3);
+          for(const [backend,bits] of [['realsense',8],['v4l2',null],['orbbec',16]]){
+            const switched=page.waitForResponse(response=>response.url().endsWith('/api/camera/select'));
+            await page.selectOption('#camera-select',backend);
+            assert.equal((await switched).status(),200);
+            await page.waitForFunction(backend=>document.querySelector('#camera-select').value===backend,backend);
+            const camera=await (await page.request.get(service.url+'/api/camera/status')).json();
+            assert.equal(camera.backend,backend);
+            for(const channel of ['depth','ir','pointcloud'])
+              assert.equal(await page.locator(`[data-channel="${channel}"]`).isVisible(),bits!==null);
+            if(bits!==null){
+              await page.click('[data-channel="ir"]');
+              await page.waitForFunction(bits=>document.querySelector('#raw-link').textContent===`Raw ${bits}-bit ir`,bits);
+            }else{
+              assert.equal(await page.inputValue('#camera-channel'),'color');
+              assert.equal((await page.request.get(service.url+'/api/camera/depth/raw.png')).status(),404);
+            }
+            assert.equal((await (await page.request.get(service.url+'/api/settings')).json()).capture_paused,true);
+          }
         }else{
+          assert.equal(await page.locator('#camera-select').isEnabled(),false);
           assert(!(await page.textContent('#comparison-content')).includes('Volume estimate'));
           for(const channel of ['depth','ir','pointcloud'])
             assert.equal(await page.locator(`[data-channel="${channel}"]`).isVisible(),false);

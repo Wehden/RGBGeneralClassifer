@@ -17,7 +17,7 @@ from PIL import Image
 
 from board.tracking import Tracker
 from common.geometry import bounds, iou
-from rgb.camera import CameraUnavailable, FrameExpired, depth_summary, jpg, png
+from rgb.camera import CameraBusy, CameraUnavailable, FrameExpired, depth_summary, jpg, png
 from rgb.enrichment import SCHEMA, validate_readings
 from rgb.local_store import encode
 from rgb.object_volume import estimate_objects
@@ -98,7 +98,10 @@ class LocalRuntime:
                             'read_timeout_s':read_timeout,'connect_timeout_s':connect_timeout,'max_tokens':max_tokens}
 
     def start(self):
-        self.camera.start()
+        try:self.camera.start()
+        except (CameraBusy,CameraUnavailable) as exc:
+            self.camera.state='busy' if isinstance(exc,CameraBusy) else 'unavailable'
+            self.camera.error=str(exc)
         targets=[('detector',self._detector),('archive',self._archive_loop)]
         if self.local_materials:targets.append(('materials',self._materials))
         for name,target in targets:
@@ -110,8 +113,32 @@ class LocalRuntime:
         started=time.monotonic();self.stop_event.set()
         with self.condition:self.condition.notify_all()
         with self.material_condition:self.material_condition.notify_all()
-        self.camera.stop()
+        with self.capture_lock:self.camera.stop()
         for thread in self.threads:thread.join(max(0,deadline-(time.monotonic()-started)))
+
+    def select_camera(self,camera_id):
+        from rgb.camera_devices import discover
+        with self.capture_lock:
+            if self.stop_event.is_set():
+                raise CameraUnavailable('Service is stopping')
+            selection=next((item for item in discover() if item['id']==camera_id),None)
+            if selection is None:
+                raise ValueError('Selected camera is no longer connected; refresh the camera list')
+            previous_stop=self.camera.stop_event
+            try:self.camera.select(selection)
+            finally:
+                # In-flight detector/material/cloud work retains its old session
+                # and cannot become a result for the replacement camera.
+                if self.camera.stop_event is not previous_stop:
+                    with self.readings_lock:self.live_readings.clear()
+                    with self.material_condition:self.material_pending=None
+                    with self.material_lock:
+                        self.material_cache.clear();self.material_inputs.clear()
+                        self.material_context=None;self.material_comparison=None
+                        self.material_comparison_images.clear()
+                    with self.condition:self.pending=None;self.condition.notify_all()
+                self.configuration.update(camera_backend=self.camera.backend,camera_serial=self.camera.serial,
+                                          camera_device=self.camera.device,active_camera_id=self.camera.selection_id)
 
     def _detector(self):
         try:
@@ -173,11 +200,12 @@ class LocalRuntime:
                 if metrology is not None:
                     result['metrology']=metrology
                     result['detector']['config'].update(volume_basis='native_depth_instance_mask',volume_method_version=1)
-                if self.local_materials:
-                    with self.material_condition:
-                        self.material_pending=(frame,[dict(d) for d in detections],copy.deepcopy(result['detector']))
-                        self.material_condition.notify_all()
                 with self.camera.condition:
+                    if frame.metadata['session_id']!=self.camera.session_id:continue
+                    if self.local_materials:
+                        with self.material_condition:
+                            self.material_pending=(frame,[dict(d) for d in detections],copy.deepcopy(result['detector']))
+                            self.material_condition.notify_all()
                     self.camera.latest_detection=(frame,result)
                     self.camera.detector_status.update(state='running',error=None,detector_ms=milliseconds,
                         metrology_ms=metrology['elapsed_ms'] if metrology else None,
@@ -247,6 +275,7 @@ class LocalRuntime:
                      'candidates','policy','model','manifest_sha256','source_frame_id','source_box']}})
             if 'volume' in detection:comparison_rows[-1]['volume']=copy.deepcopy(detection['volume'])
             with self.material_lock:
+                if self.camera.session_id!=frame.metadata['session_id']:return
                 self.material_cache[detection['track_id']]={'reading':reading,'source_box':detection['box'],
                     'session_id':frame.metadata['session_id'],'calibration_sha256':frame.metadata['calibration_sha256'],
                     'received_monotonic_s':frame.metadata['received_monotonic_s']}
@@ -330,55 +359,60 @@ class LocalRuntime:
     def archive(self,frame=None,result=None):
         if not self.archive_slots.acquire(blocking=False):raise RuntimeError('Archive mutation queue is full')
         try:
-            if frame is None:
-                # The camera advances faster than detection. Capture a completed
-                # frame/result pair instead of inventing an empty detection set.
-                with self.camera.condition:
-                    current=self.camera.get()
-                    latest=self.camera.latest_detection
-                    if (not latest
-                            or latest[0].metadata['session_id']!=current.metadata['session_id']
-                            or latest[0].metadata['calibration_sha256']!=current.metadata['calibration_sha256']
-                            or latest[0].color_rgb.shape!=current.color_rgb.shape
-                            or time.monotonic()-latest[0].metadata['received_monotonic_s']>self.camera.freshness_s):
-                        raise CameraUnavailable('No fresh detector-completed frame available; retry capture')
-                    frame,result=latest
-            existing=self.store.event_for_frame(frame.id)
-            if existing:return existing
-            if result is None:
-                with self.camera.condition:latest=self.camera.latest_detection
-                if not latest or latest[0].id!=frame.id:
-                    raise CameraUnavailable('Detection is not available for this frame; retry capture')
-                result=latest[1]
-            detections=[];sensors={}
-            for index,original in enumerate(result['detections']):
-                detection=dict(original)
-                material=detection.get('local_material')
-                if material:
-                    with self.material_lock:evidence=self.material_inputs.get(material['crop_sha256'])
-                    if evidence is not None:
-                        detection['local_material']={**material,'crop_asset':self.store.asset(evidence,'.png')}
-                        sensors[f'material_crop_{index}']=detection['local_material']['crop_asset']
-                    else:
-                        detection['local_material']={**material,'status':'evidence_unavailable','label':None}
-                detections.append(detection)
-            for channel,data in frame.previews.items():sensors[channel+'_preview']=self.store.asset(data,'.jpg')
-            for name in ['depth_native','ir_native','depth_registered']:
-                array=getattr(frame,name)
-                if array is not None:sensors[name]=self.store.asset(png(array),'.png')
-            calibration=self.store.asset(encode(frame.metadata['calibration']).encode(),'.json')
-            metadata=self.store.asset(encode(frame.metadata).encode(),'.json')
-            event={'event_id':str(uuid4()),'frame_id':frame.id,'session_id':frame.metadata['session_id'],'source_id':'femto-bolt',
-                   'observed_at':frame.metadata['received_at'],'received_at':now(),'location':None,
-                   'detector':result['detector'],'detections':detections,
-                   'frame_metadata':frame.metadata,'sensor_assets':sensors,'calibration_asset':calibration,'metadata_asset':metadata}
-            if 'metrology' in result:event['metrology']=copy.deepcopy(result['metrology'])
-            event['runtime_config']={**self.configuration,'archive_interval_s':self.store.settings()['capture_interval_s']}
-            location=self.store.location_at(event['source_id'],event['observed_at'])
-            if location:event.update(location=location['label'] or None,location_kind=location['method'],location_record=location)
-            self.store.save(event,frame.previews['color'])
-            return self.store.event_for_frame(frame.id)
+            with self.capture_lock:return self._archive(frame,result)
         finally:self.archive_slots.release()
+
+    def _archive(self,frame=None,result=None):
+        if frame is None:
+            # The camera advances faster than detection. Capture a completed
+            # frame/result pair instead of inventing an empty detection set.
+            with self.camera.condition:
+                current=self.camera.get()
+                latest=self.camera.latest_detection
+                if (not latest
+                        or latest[0].metadata['session_id']!=current.metadata['session_id']
+                        or latest[0].metadata['calibration_sha256']!=current.metadata['calibration_sha256']
+                        or latest[0].color_rgb.shape!=current.color_rgb.shape
+                        or time.monotonic()-latest[0].metadata['received_monotonic_s']>self.camera.freshness_s):
+                    raise CameraUnavailable('No fresh detector-completed frame available; retry capture')
+                frame,result=latest
+        existing=self.store.event_for_frame(frame.id)
+        if existing:return existing
+        if frame.metadata['session_id']!=self.camera.session_id:
+            raise CameraUnavailable('Active camera changed; retry capture')
+        if result is None:
+            with self.camera.condition:latest=self.camera.latest_detection
+            if not latest or latest[0].id!=frame.id:
+                raise CameraUnavailable('Detection is not available for this frame; retry capture')
+            result=latest[1]
+        detections=[];sensors={}
+        for index,original in enumerate(result['detections']):
+            detection=dict(original)
+            material=detection.get('local_material')
+            if material:
+                with self.material_lock:evidence=self.material_inputs.get(material['crop_sha256'])
+                if evidence is not None:
+                    detection['local_material']={**material,'crop_asset':self.store.asset(evidence,'.png')}
+                    sensors[f'material_crop_{index}']=detection['local_material']['crop_asset']
+                else:
+                    detection['local_material']={**material,'status':'evidence_unavailable','label':None}
+            detections.append(detection)
+        for channel,data in frame.previews.items():sensors[channel+'_preview']=self.store.asset(data,'.jpg')
+        for name in ['depth_native','ir_native','depth_registered']:
+            array=getattr(frame,name)
+            if array is not None:sensors[name]=self.store.asset(png(array),'.png')
+        calibration=self.store.asset(encode(frame.metadata['calibration']).encode(),'.json')
+        metadata=self.store.asset(encode(frame.metadata).encode(),'.json')
+        event={'event_id':str(uuid4()),'frame_id':frame.id,'session_id':frame.metadata['session_id'],'source_id':'femto-bolt',
+               'observed_at':frame.metadata['received_at'],'received_at':now(),'location':None,
+               'detector':result['detector'],'detections':detections,
+               'frame_metadata':frame.metadata,'sensor_assets':sensors,'calibration_asset':calibration,'metadata_asset':metadata}
+        if 'metrology' in result:event['metrology']=copy.deepcopy(result['metrology'])
+        event['runtime_config']={**self.configuration,'archive_interval_s':self.store.settings()['capture_interval_s']}
+        location=self.store.location_at(event['source_id'],event['observed_at'])
+        if location:event.update(location=location['label'] or None,location_kind=location['method'],location_record=location)
+        self.store.save(event,frame.previews['color'])
+        return self.store.event_for_frame(frame.id)
 
     def update_capture_settings(self,values,actor=None):
         # A pause acknowledgement follows any already-started automatic save.

@@ -40,7 +40,12 @@ def v4l2_name(device):
 def v4l2_serial(device):
     node=Path('/sys/class/video4linux')/Path(device).resolve().name/'device'
     for parent in [node.resolve(),*node.resolve().parents]:
-        if (parent/'serial').exists():return (parent/'serial').read_text().strip()
+        if (parent/'serial').exists():
+            serial=(parent/'serial').read_text().strip()
+            if serial:return serial
+    from rgb.camera_devices import usb_identity
+    try:return usb_identity(node)
+    except OSError:pass
     raise CameraUnavailable('Cannot establish physical camera identity for singleton lock')
 
 
@@ -183,6 +188,8 @@ class Camera:
         self.started=time.monotonic()
         self.configuration={}
         self.fatal_error=None
+        self.selection_id=None
+        self.lifecycle_lock=threading.Lock()
 
     @property
     def name(self):
@@ -226,6 +233,53 @@ class Camera:
         self.stop_event.set()
         with self.condition:self.condition.notify_all()
         if self.thread:self.thread.join(3)
+        if self.thread and self.thread.is_alive():return False
+        if self.lock:self.lock.close()
+        self.lock=None
+        self.state='stopped'
+        return True
+
+    def select(self,selection):
+        """Release the old owner fully before acquiring the selected physical camera."""
+        if not self.lifecycle_lock.acquire(blocking=False):
+            raise CameraBusy('A camera change is already in progress')
+        try:
+            physical=getattr(self,'usb_serial',None) or self.serial
+            same=(self.selection_id==selection['id'] or self.backend==selection['backend']
+                  and physical==selection['usb_serial'])
+            if same and self.thread and self.thread.is_alive() and not self.stop_event.is_set():
+                return
+            previous={'id':self.selection_id,'backend':self.backend,'serial':self.serial,
+                      'device':self.device,'usb_serial':getattr(self,'usb_serial',None),
+                      'name':self.name}
+            if not self.stop():
+                raise CameraUnavailable('Current camera is still stopping; retry the change')
+            def prepare(item):
+                with self.condition:
+                    self.backend=item['backend'];self.serial=item['serial']
+                    self.device=item['device'] or '/dev/video0'
+                    self.usb_serial=item['usb_serial'];self.selection_id=item['id']
+                    self.stop_event=threading.Event();self.thread=None;self.lock=None
+                    self.frames.clear();self.latest_detection=None
+                    self.session_id=None;self.calibration=None;self.calibration_hash=None
+                    self.state='starting';self.error=None;self.fatal_error=None
+                    self.info={'name':item['name']}
+                    self.counters=dict.fromkeys(self.counters,0);self.started=time.monotonic()
+                    detector_state='unavailable' if self.detector_status.get('state')=='unavailable' else 'waiting'
+                    self.detector_status={**self.detector_status,'state':detector_state,'frame_id':None,'count':0}
+                    self.condition.notify_all()
+            prepare(selection)
+            try:
+                self.lock=CameraLock(selection['usb_serial'])
+                self.start()
+            except Exception:
+                self.stop()
+                prepare(previous)
+                physical=previous['usb_serial'] or previous['serial']
+                if physical:self.lock=CameraLock(physical)
+                self.start()
+                raise
+        finally:self.lifecycle_lock.release()
 
     def get(self,frame_id=None):
         with self.condition:
@@ -289,7 +343,6 @@ class Camera:
                 delay=1
             except CameraBusy as exc:
                 self.state='busy';self.error=str(exc)
-                self.fatal_error=str(exc)
                 break
             except Exception as exc:
                 self.state='unavailable';self.error=f'{type(exc).__name__}: {str(exc)[:250]}'

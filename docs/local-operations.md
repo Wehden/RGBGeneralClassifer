@@ -187,6 +187,63 @@ detector time, pending replacement counts, model outcomes, and workload-specific
 request latency. Latency windows hold 60 successes per workload, with at most
 128 recent workload groups. Fewer than 20 samples is provisional evidence.
 
+## RealSense cameras
+
+The native RealSense backend is qualified against the attached **D415** with
+librealsense 2.59.1 and `pyrealsense2==2.59.1.11053`. Install the current
+`requirements-local.txt` / `requirements-desktop.txt` into the application
+environment; existing kernel drivers and firmware stay managed by the system.
+
+```sh
+.venv/bin/python -m rgb.local --camera-backend realsense --no-vlm
+# Desktop, when starting a new service:
+rgb-console -- --camera-backend realsense --no-vlm
+```
+
+The Femto Bolt remains the default backend. One runner owns one camera and one
+archive. Close the owning service before switching backends; attaching a new
+desktop window uses the already running service. Both camera types use the
+same dashboard, SQLite settings/evidence, detection/material pipeline, and
+explicit cloud review controls.
+
+When several RealSense cameras are connected, select the SDK-reported serial
+with `--camera-serial`. On the attached D415, the SDK camera serial differs from
+the USB descriptor/ASIC serial. Native RealSense and V4L2 capture lock the
+physical USB identity together. Close RealSense Viewer before capture.
+
+At the default 15 FPS, the D415 uses 1280×720 RGB, 640×480 native Z16 depth,
+and 640×480 native left Y8 IR. The adapter negotiates these or its supported
+RGB/depth alternatives at the requested rate. IR appears only when the
+matching left IR profile is available. Unsupported rates fail explicitly.
+SDK frame sets with missing channels, differing timestamp domains, or skew
+above `--max-skew-ms` are rejected; the default remains 10 ms.
+
+Native depth stays uint16 with the sensor-reported scale converted from metres
+to millimetres per raw unit. Native D415 IR stays uint8; raw PNGs and saved
+evidence preserve that exact dtype, and download labels report the bit depth.
+Color-registered depth comes from `librealsense.align`. Calibration retains
+factory intrinsics, the original SDK distortion model/coefficients, and
+depth/IR-to-color extrinsics; column-major SDK rotations become row-major
+matrices and metre translations become millimetres.
+
+The D415 RGB profile reports inverse Brown-Conrady with zero coefficients,
+which is exactly pinhole and supports the shared 3D viewer. Nonzero inverse or
+modified Brown-Conrady models are retained as unsupported for geometric
+projection, rather than treated as OpenCV's ordinary Brown-Conrady model.
+Depth box distances and 3D preview are available; the existing volume estimator
+reports `unsupported_depth_profile` for the D415's depth mode until its
+measurement operating range is separately qualified.
+
+Historical local source ID `femto-bolt` remains stable across backends. The
+actual device name, SDK serial, physical USB serial, profiles, and calibration
+identify each RealSense frame and archived observation.
+
+Live verification on 2026-11-05 exercised all three MJPEG streams, native depth
+and IR PNGs, aligned depth, and a 16,925-point calibrated 3D frame. Accepted
+channel skew was 0.6 ms. A manual observation preserved device metadata and
+native 8-bit IR, and the shared lock blocked simultaneous V4L2 capture. This
+check used the pinned fallback detector with cloud inference disabled.
+
 ## Direct camera API
 
 These calls require no credentials and create no model requests:

@@ -46,6 +46,8 @@ class PointCloudBuilder:
                 raise ValueError()
             distortion=plane.get('distortion',{'model':'NONE'})
             model=str(distortion.get('model','NONE')).upper()
+            if 'INVERSE' in model or 'MODIFIED' in model:
+                raise ValueError()
             if 'BROWN_CONRADY' not in model and model not in {'NONE','OBCAMERADISTORTIONMODEL.NONE'}:
                 raise ValueError()
             coefficients=np.array([float(distortion.get(name,0)) for name in

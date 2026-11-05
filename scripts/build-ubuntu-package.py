@@ -88,6 +88,8 @@ def stage_package(stage, version, *, bundled=False, root=ROOT):
               stage / "usr/lib/udev/rules.d/71-bolt-rgb.rules")
     copy_file(root / "LICENSE", stage / "usr/share/doc/bolt-rgb/copyright")
     copy_file(root / "docs/ubuntu-installer.md", stage / "usr/share/doc/bolt-rgb/README.md")
+    for name in ("local-operations.md", "model-weights.md"):
+        copy_file(root / "docs" / name, stage / "usr/share/doc/bolt-rgb" / name)
     # The model has a separate license from the application.
     copy_file(root / "models/yoloe-26n-pf-320/LICENSE",
               stage / "usr/share/doc/bolt-rgb/model-license")

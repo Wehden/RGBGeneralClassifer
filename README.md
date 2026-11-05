@@ -2,7 +2,8 @@
 
 CI and release verification: [hosted qualification matrix and local reproduction](docs/ci-qualification.md).
 
-**RGB Console** supports Linux USB webcams and the **Orbbec Femto Bolt**
+**RGB Console** supports Linux USB webcams, the **Orbbec Femto Bolt**, and
+the **RealSense D415** through the native librealsense Python binding,
 with color, registered depth, and native IR. Visual review uses **Nova 2 Lite
 on Amazon Bedrock** by default through
 the `default` AWS profile. **OpenRouter** also supports Nova 2 Lite, Nova Lite,
@@ -58,6 +59,13 @@ The console attaches to an existing service or starts a local runner. Closing
 it stops only a runner it started. See [desktop setup and shortcuts](docs/desktop-console.md)
 for XCB dependencies, the desktop menu launcher, native downloads and
 camera-only operation.
+
+For the RealSense camera, start a new console/service with
+`rgb-console -- --camera-backend realsense` (or
+`.venv/bin/python -m rgb.local --camera-backend realsense --no-vlm`).
+Use the SDK-reported `--camera-serial` when multiple RealSense devices are
+connected. See [RealSense operation](docs/local-operations.md#realsense-cameras)
+for streams, native IR, and calibration support.
 
 Automatic observations default to **one per minute**, with an editable saved
 interval. **Pause capture** stops automatic records and their live VLM work

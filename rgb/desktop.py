@@ -226,7 +226,7 @@ def main():
             camera = health['camera']
             self.setWindowTitle('RGB Console · ' + camera.get('name', camera.get('device', {}).get('name', 'Camera')))
             channels=set(camera.get('channels',[]))
-            if camera.get('backend')=='orbbec' and 'depth' in channels:channels.add('pointcloud')
+            if camera.get('backend') in {'orbbec','realsense'} and 'depth' in channels:channels.add('pointcloud')
             for channel,action in self.channel_actions.items():action.setEnabled(channel in channels)
             lifecycle = 'Own service' if status['owned'] else 'Attached'
             self.service_label.setToolTip(('Closing stops this service' if status['owned'] else 'Closing leaves the service running')

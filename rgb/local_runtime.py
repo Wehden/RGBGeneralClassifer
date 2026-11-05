@@ -150,7 +150,7 @@ class LocalRuntime:
                         self.material_comparison_images.clear()
                 settings=self.store.settings();model.threshold=settings['detector_threshold']
                 detections,milliseconds=model.detect(cv2.cvtColor(frame.color_rgb,cv2.COLOR_RGB2BGR),
-                    with_masks=self.camera.backend=='orbbec' and frame.depth_native is not None)
+                    with_masks=self.camera.backend in {'orbbec','realsense'} and frame.depth_native is not None)
                 metrology=self._measure_volumes(frame,detections,model.instance_masks)
                 if metrology is not None and model.mask_error:metrology['mask_error']=model.mask_error
                 tracker.update(detections,frame.metadata['received_monotonic_s'])
@@ -192,7 +192,7 @@ class LocalRuntime:
 
     def _measure_volumes(self,frame,detections,masks):
         # RGB-only sources never acquire a volume field or mask workload.
-        if self.camera.backend!='orbbec':return None
+        if self.camera.backend not in {'orbbec','realsense'}:return None
         volumes,summary=estimate_objects(frame,detections,masks)
         for detection,volume in zip(detections,volumes):detection['volume']=volume
         return summary

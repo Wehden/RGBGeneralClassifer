@@ -3,7 +3,7 @@
 The `bolt-rgb` Debian package targets **Ubuntu 24.04 LTS on Intel/AMD
 64-bit systems (amd64), with Python 3.12**. It installs RGB Console, its
 local web service, the pinned nano fallback detector, a desktop menu entry,
-and a Femto Bolt USB permission rule. The runtime uses the existing
+and USB permission rules for the Femto Bolt and RealSense D415. The runtime uses the existing
 `requirements-desktop.txt` pins and an isolated, per-user virtualenv.
 ARM64 and other Ubuntu releases need separate dependency qualification.
 
@@ -26,7 +26,7 @@ on Ubuntu 24.04 amd64 with Python 3.12 and pip:
 .venv/bin/python scripts/build-ubuntu-package.py --bundle-wheels
 ```
 
-This includes the complete resolved wheel set, including the Orbbec SDK,
+This includes the complete resolved wheel set, including the Orbbec and RealSense SDK bindings,
 ONNX Runtime, OpenVINO, and Qt. Setup verifies each wheel's SHA-256 and uses
 only those files. The bundled package is much larger. Build either variant
 with an explicit version for upgrades, for example `--version 0.20261105.2`.
@@ -59,7 +59,7 @@ previously populated cache: bundling Python wheels does not make installation
 on an unprepared machine entirely offline.
 
 Reconnect the camera after installation. The permission rule applies only
-to the Femto Bolt (`2bc5:066b`), grants the active local desktop user access,
+to the Femto Bolt (`2bc5:066b`) and RealSense D415 (`8086:0ad3`), grants the active local desktop user access,
 and gives the `video` group read/write access. For a headless or SSH-only
 user, add that account to `video`, then log out and in:
 
@@ -75,6 +75,24 @@ bolt-rgb -- --no-vlm
 # Alternatively, run just the browser/API service:
 bolt-rgb-service --no-vlm
 ```
+
+For the RealSense camera, close the console/service that owns the current
+camera, then launch:
+
+```sh
+bolt-rgb -- --camera-backend realsense --no-vlm
+# Alternatively:
+bolt-rgb-service --camera-backend realsense --no-vlm
+```
+
+The RealSense binding is included in both installer variants. Existing
+librealsense kernel drivers and firmware are managed by the destination system.
+Use the SDK-reported `--camera-serial` for device selection; the USB/ASIC serial
+can differ. Close RealSense Viewer before starting console capture.
+The D415 supplies RGB, native uint16 depth, native uint8 left IR, and depth
+registered to the color camera for the 3D viewer.
+See [RealSense operation](local-operations.md#realsense-cameras) for calibration
+and measurement limitations.
 
 The service is available at `http://127.0.0.1:8080`. The packaged service
 command always binds to loopback. The desktop uses the existing attach/start
@@ -120,7 +138,7 @@ fallback and leaves optional local material inference unavailable.
 See [private model releases](model-weights.md) for a verified, pinned model
 download instead of copying a cache.
 
-After reconnecting the Bolt, check RGB, depth, IR, and 3D and verify the reported
+After reconnecting the camera, check RGB, depth, IR, and 3D and verify the reported
 detector/material model selection. Physical camera operation must be checked
 on the destination's USB controller and cable.
 The installer does not migrate firmware or test destination hardware.

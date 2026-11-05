@@ -31,6 +31,14 @@ def test_depth_distortion_round_trip_and_mm_scale():
     assert np.allclose(points[:,2],1.001)
 
 
+@pytest.mark.parametrize('model',['REALSENSE_INVERSE_BROWN_CONRADY','REALSENSE_MODIFIED_BROWN_CONRADY'])
+def test_depth_geometry_rejects_unsupported_realsense_distortion(model):
+    reference=plane()
+    reference['distortion']['model']=model
+    with pytest.raises(ValueError,match='Unsupported distortion'):
+        backproject(np.full((11,13),1000,np.uint16),reference,1.)
+
+
 def test_native_depth_rejects_invalid_samples_and_calibration():
     depth = np.array([[0,499,500,3860,3861]],np.uint16)
     reference = plane(5,1)

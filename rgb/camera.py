@@ -113,6 +113,8 @@ class Frame:
 
 def make_frame(color_bgr,depth,ir,registered,metadata,color_jpeg=None):
     color=cv2.cvtColor(color_bgr,cv2.COLOR_BGR2RGB)
+    metadata['raw_bit_depth']={name:array.dtype.itemsize*8 for name,array in
+                               [('depth',depth),('ir',ir)] if array is not None}
     previews={'color':color_jpeg if color_jpeg is not None else jpg(color_bgr)}
     if depth is not None:
         display_depth=registered if registered is not None else depth
@@ -194,6 +196,10 @@ class Camera:
     def reserve(self):
         """Use passive USB identity discovery before opening the SDK/device."""
         if self.lock is not None:return
+        if self.backend=='realsense':
+            from rgb.realsense import reserve
+            reserve(self)
+            return
         serial=self.serial
         if self.backend=='v4l2':
             try:reported=v4l2_serial(self.device)
@@ -246,8 +252,8 @@ class Camera:
             self.state='running';self.error=None
             self.condition.notify_all()
 
-    def accept_timestamps(self,timestamps):
-        if set(timestamps)!={'color','depth','ir'}:
+    def accept_timestamps(self,timestamps,expected=None):
+        if set(timestamps)!=(expected if expected is not None else {'color','depth','ir'}):
             self.counters['incomplete']+=1
             return False
         if (max(timestamps.values())-min(timestamps.values()))/1000>self.skew_ms:
@@ -264,6 +270,7 @@ class Camera:
                     'device':{**self.info,'name':self.name},'session_id':self.session_id,
                     'frame_id':latest.id if latest else None,'frame_age_s':age,
                     'channels':list(latest.previews) if latest else [],
+                    'raw_bit_depth':latest.metadata.get('raw_bit_depth',{}) if latest else {},
                     'profiles':latest.metadata['profiles'] if latest else None,
                     'frames_in_cache':len(self.frames),'cache_bytes':sum(f.memory_bytes for f in self.frames.values()),
                     'counters':dict(self.counters),'capture_fps':self.counters['accepted']/max(time.monotonic()-self.started,1),
@@ -275,6 +282,9 @@ class Camera:
             accepted_before=self.counters['accepted']
             try:
                 if self.backend=='orbbec':self._orbbec()
+                elif self.backend=='realsense':
+                    from rgb.realsense import capture
+                    capture(self)
                 else:self._v4l2()
                 delay=1
             except CameraBusy as exc:

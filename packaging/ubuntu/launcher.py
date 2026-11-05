@@ -78,7 +78,7 @@ def setup(root=PACKAGE_ROOT, *, offline=False):
         subprocess.run([python, "-m", "pip", "check"], check=True)
         # Import the actual local runtime; never acquire the camera or invoke a VLM.
         subprocess.run(
-            [python, "-c", "import rgb.local, PySide6, pyorbbecsdk, onnxruntime, openvino"],
+            [python, "-c", "import rgb.local, PySide6, pyorbbecsdk, pyrealsense2, onnxruntime, openvino"],
             cwd=root, check=True)
         (directory / ".ready").write_text("Dependencies installed and imports verified.\n")
     print("Setup complete. Launch bolt-rgb, or bolt-rgb-service --no-vlm.", flush=True)

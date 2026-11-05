@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=RGB Console
-Comment=Femto Bolt camera capture and visual review
+Comment=RGB-D camera capture and visual review
 Exec=/usr/bin/bolt-rgb
 TryExec=/usr/bin/bolt-rgb
 Icon=camera-video

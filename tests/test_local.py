@@ -993,6 +993,40 @@ def decode_cloud(payload):
     return header,np.frombuffer(payload[4+length:],POINT_DTYPE)
 
 
+def test_realsense_api_views_uint8_ir_and_archive_keep_native_evidence(local):
+    store,camera,frame,result,runtime,app=local
+    camera.backend='realsense'
+    cloud_calibration(frame)
+    metadata={**frame.metadata,'frame_id':str(uuid4()),
+              'device':{'name':'RealSense D415','serial':'sdk-serial'}}
+    f=make_frame(np.full((30,40,3),80,np.uint8),frame.depth_native,
+                 np.arange(80,dtype=np.uint8).reshape(8,10),frame.depth_registered,metadata)
+    camera.publish(f);result.update(frame_id=f.id)
+    camera.latest_detection=(f,result)
+    client=app.test_client()
+    status=client.get('/api/camera/status').json
+    assert status['views']==['color','depth','ir','pointcloud']
+    assert status['raw_bit_depth']=={'depth':16,'ir':8}
+    raw=client.get('/api/camera/ir/raw.png')
+    assert raw.headers['X-RGB-Plane-Dtype']=='uint8'
+    assert np.array_equal(cv2.imdecode(np.frombuffer(raw.data,np.uint8),cv2.IMREAD_UNCHANGED),f.ir_native)
+    assert client.get('/api/camera/pointcloud').status_code==200
+    event=runtime.archive(f,result)
+    response=client.get('/api/events/'+event['event_id']+'/assets/ir_native')
+    saved=cv2.imdecode(np.frombuffer(response.data,np.uint8),cv2.IMREAD_UNCHANGED)
+    assert saved.dtype==np.uint8 and np.array_equal(saved,f.ir_native)
+    assert client.get('/api/review/records').json['records'][0]['camera_name']=='RealSense D415'
+    assert event['frame_metadata']['raw_bit_depth']=={'depth':16,'ir':8}
+
+
+@pytest.mark.parametrize('model',['REALSENSE_INVERSE_BROWN_CONRADY','REALSENSE_MODIFIED_BROWN_CONRADY'])
+def test_pointcloud_does_not_treat_inverse_or_modified_brown_as_opencv_brown(local,model):
+    _,_,frame,_,_,app=local
+    calibration=cloud_calibration(frame)
+    calibration['planes']['color']['distortion'].update(model=model,k1=.1)
+    assert app.test_client().get('/api/camera/pointcloud').status_code==503
+
+
 def test_pointcloud_uses_calibrated_registered_depth_and_exact_rgb_without_archiving(local):
     store,camera,frame,result,runtime,app=local
     cloud_calibration(frame)

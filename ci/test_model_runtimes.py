@@ -10,6 +10,7 @@ import numpy as np
 import onnxruntime
 import openvino as ov
 import pyorbbecsdk
+import pyrealsense2
 import pytest
 
 from board.yoloe import Detector, prepare
@@ -137,6 +138,11 @@ def test_orbbec_installed_sdk_can_initialize_without_usb_hardware():
     assert devices.get_count() >= 0
     assert onnxruntime.get_available_providers()
     assert cv2.imencode('.jpg', np.zeros((16, 16, 3), np.uint8))[0]
+
+
+def test_realsense_installed_sdk_can_initialize_without_usb_hardware():
+    context = pyrealsense2.context()
+    assert len(context.query_devices()) >= 0
 
 
 def test_bedrock_uses_real_botocore_protocol_without_network():

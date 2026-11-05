@@ -22,7 +22,7 @@ def parser():
     p.add_argument('--state-dir',default=os.environ.get('RGB_STATE_DIR',str(Path.home()/'.local/share/bolt-rgb')))
     p.add_argument('--aws-profile',default=os.environ.get('RGB_AWS_PROFILE','default'))
     p.add_argument('--aws-region',default=os.environ.get('RGB_AWS_REGION','us-west-2'))
-    p.add_argument('--camera-backend',choices=['orbbec','v4l2'],default=os.environ.get('RGB_CAMERA_BACKEND','orbbec'))
+    p.add_argument('--camera-backend',choices=['orbbec','realsense','v4l2'],default=os.environ.get('RGB_CAMERA_BACKEND','orbbec'))
     p.add_argument('--camera-serial',default=os.environ.get('RGB_CAMERA_SERIAL'))
     p.add_argument('--camera-device',default=os.environ.get('RGB_CAMERA_DEVICE','/dev/video0'))
     p.add_argument('--provider',choices=list(MODELS),default=os.environ.get('RGB_VLM_PROVIDER'))

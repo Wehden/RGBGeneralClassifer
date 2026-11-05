@@ -18,6 +18,8 @@ def camera_matrix(plane, shape):
     if not np.isfinite([fx, fy, cx, cy]).all() or min(fx, fy) <= 0:
         raise ValueError('Invalid camera intrinsics')
     model = str(plane.get('distortion', {}).get('model', 'NONE')).upper()
+    if 'INVERSE' in model or 'MODIFIED' in model:
+        raise ValueError('Unsupported distortion model')
     if 'BROWN_CONRADY' not in model and model not in {'NONE', 'OBCAMERADISTORTIONMODEL.NONE'}:
         raise ValueError('Unsupported distortion model')
     coefficients = np.array([float(plane.get('distortion', {}).get(key, 0))

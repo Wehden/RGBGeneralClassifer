@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+if [ "$1" = configure ]; then
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+    fi
+    printf '%s\n' \
+        'RGB Console installed. Reconnect the RGB-D camera to apply USB permissions.' \
+        'Run bolt-rgb-setup as your normal user, then launch bolt-rgb.' \
+        'No camera service has been started.'
+fi

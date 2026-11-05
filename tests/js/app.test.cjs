@@ -100,6 +100,20 @@ test('camera mode icons follow capabilities and active view without showing unav
   assert.equal(node('mode-color')['aria-pressed'],'false');
 });
 
+test('RealSense capabilities enable 3D and retain the actual IR bit depth',()=>{
+  const {context,node}=setup();
+  for(const channel of ['color','depth','ir','pointcloud']){
+    const option=new Element('option');option.value=channel;node('camera-channel').append(option);
+    node('mode-'+channel).dataset.channel=channel;
+  }
+  node('camera-channel').value='ir';node('raw-link').hidden=false;
+  context.renderCamera({backend:'realsense',name:'RealSense D415',views:['color','depth','ir','pointcloud'],raw_bit_depth:{depth:16,ir:8}});
+  assert.equal(node('mode-pointcloud').hidden,false);
+  assert.equal(node('raw-link').textContent,'Raw 8-bit ir');
+  assert.equal(context.rawLabel('depth'),'Raw 16-bit depth');
+  assert.equal(context.rawLabel('ir',{ir:16}),'Raw 16-bit ir'); // Archived Bolt metadata stays independent.
+});
+
 test('evaluation sends the displayed context, independent of global mode',async()=>{
   const {context}=setup();vm.runInContext("settings={display_mode:'materials'}",context);
   const revision={candidate_revision:'a'.repeat(64),mode:'objects',settings_version:3};

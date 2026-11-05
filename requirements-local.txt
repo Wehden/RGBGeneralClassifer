@@ -6,4 +6,5 @@ openvino==2026.2.1
 # The official Orbbec SDK wheel includes opencv-python; avoid installing both
 # opencv-python and opencv-python-headless in the local runtime environment.
 pyorbbecsdk2==2.1.2
+pyrealsense2==2.59.1.11053
 opencv-python==5.0.0.93

@@ -2,6 +2,8 @@ const $ = id => document.getElementById(id);
 let sources = [], cursor = null, selected = null, timer, detailTimer, settings;
 const openedHistories = new Set();
 let archiveLoaded=false;
+let rawBitDepth={depth:16,ir:16};
+function rawLabel(channel,bits=rawBitDepth){return `Raw ${bits[channel]??16}-bit ${channel}`;}
 const pointcloudViewer = window.RGBPointCloud && $('pointcloud') ?
   new window.RGBPointCloud.Viewer($('pointcloud'),message=>{$('live-state').textContent=message;}) : null;
 const liveVideo = new LiveVideo($('live'), message => { $('live-state').textContent = message; });
@@ -31,6 +33,7 @@ function syncViewIcons() {
   for(const button of document.querySelectorAll('[data-channel]'))button.setAttribute('aria-pressed',String(button.dataset.channel===selected));
 }
 function renderCamera(camera) {
+  if(camera.raw_bit_depth)rawBitDepth={depth:16,ir:16,...camera.raw_bit_depth};
   const source=sources.find(s=>s.local&&s.id===$('source').value);
   if(source&&camera.name){
     source.label=camera.name;
@@ -46,6 +49,7 @@ function renderCamera(camera) {
   if($('view-switch'))$('view-switch').hidden=supported.size<2;
   if($('calibration-link'))$('calibration-link').hidden=camera.backend==='v4l2';
   if(!supported.has(select.value)){select.value='color';live();}
+  if($('raw-link')&&!$('raw-link').hidden)$('raw-link').textContent=rawLabel(select.value==='pointcloud'?'depth':select.value);
   syncViewIcons();
 }
 async function status() {
@@ -68,7 +72,7 @@ function live() {
     if(pointcloudViewer)pointcloudViewer.stop();
     liveVideo.start( s.local && channel !== 'color' ? `/api/camera/${channel}/stream` : `/api/live/${encodeURIComponent(s.id)}/stream`);
   }
-  if (s.local) { $('snapshot-link').href=cloud?'/api/camera/pointcloud':`/api/camera/${channel}/snapshot.jpg`;$('snapshot-link').textContent=cloud?'Point cloud frame':'Snapshot'; $('raw-link').hidden=channel==='color';const rawChannel=cloud?'depth':channel; $('raw-link').href=`/api/camera/${rawChannel}/raw.png`; $('raw-link').textContent=`Raw 16-bit ${rawChannel}`; }
+  if (s.local) { $('snapshot-link').href=cloud?'/api/camera/pointcloud':`/api/camera/${channel}/snapshot.jpg`;$('snapshot-link').textContent=cloud?'Point cloud frame':'Snapshot'; $('raw-link').hidden=channel==='color';const rawChannel=cloud?'depth':channel; $('raw-link').href=`/api/camera/${rawChannel}/raw.png`; $('raw-link').textContent=rawLabel(rawChannel); }
   $('camera-location').textContent = s.location ? `${s.location} · ${s.location_method}` : '';
   loadLocation(); status(); clearInterval(timer); timer = setInterval(status, 10000);
 }
@@ -102,7 +106,7 @@ async function show(id, refresh=false) {
     if (event.frame_id) {
       const metadata=element('details');metadata.append(element('summary','Frame metadata'),element('p',`${event.frame_id} · ${event.session_id}`,'muted'));target.append(metadata);
       const evidence=element('a','Download observation evidence');evidence.href=`/api/review/evidence?event_ids=${encodeURIComponent(event.event_id)}`;target.append(evidence);
-      for (const channel of ['depth','ir']) { if (!event.sensor_assets?.[channel+'_preview']) continue; const details=element('details');details.append(element('summary',`${channel === 'depth' ? 'Depth' : 'IR'} preview and raw data`));const img=element('img');img.src=`/api/events/${id}/assets/${channel}_preview`;img.alt=`Archived ${channel} preview`;img.className='sensor-preview';const raw=element('a',`Download raw 16-bit ${channel}`);raw.href=`/api/events/${id}/assets/${channel}_native`;details.append(img,raw);target.append(details); }
+      for (const channel of ['depth','ir']) { if (!event.sensor_assets?.[channel+'_preview']) continue; const details=element('details');details.append(element('summary',`${channel === 'depth' ? 'Depth' : 'IR'} preview and raw data`));const img=element('img');img.src=`/api/events/${id}/assets/${channel}_preview`;img.alt=`Archived ${channel} preview`;img.className='sensor-preview';const raw=element('a','Download '+rawLabel(channel,event.frame_metadata?.raw_bit_depth??{depth:16,ir:16}).toLowerCase());raw.href=`/api/events/${id}/assets/${channel}_native`;details.append(img,raw);target.append(details); }
     }
     event.detections.forEach((d,i) => {
       const card = element('section',undefined,'reading'); const c = d.enhancement;

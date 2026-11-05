@@ -65,13 +65,16 @@ class CameraAPI:
             scale=frame.metadata.get('registered_depth_scale_mm',frame.metadata['depth_scale_mm']) if plane=='depth_registered' else frame.metadata['depth_scale_mm']
             response.headers.update({'X-RGB-Depth-Scale-MM':str(scale),'X-RGB-Depth-Units':'raw_uint16'})
         if plane:response.headers['X-RGB-Plane']=plane
+        if plane in {'depth_native','ir_native','depth_registered'}:
+            array=getattr(frame,plane)
+            if array is not None:response.headers['X-RGB-Plane-Dtype']=str(array.dtype)
         return response
 
     def status(self):
         status=self.camera.status()
         settings=self.runtime.store.settings()
         return jsonify(**status,stream_viewers=self.active,
-                       views=status['channels']+(['pointcloud'] if self.camera.backend=='orbbec' and 'depth' in status['channels'] else []),
+                       views=status['channels']+(['pointcloud'] if self.camera.backend in {'orbbec','realsense'} and 'depth' in status['channels'] else []),
                        configuration={**self.runtime.configuration,'archive_interval_s':settings['capture_interval_s']})
 
     def calibration(self):

@@ -9,9 +9,11 @@ from rgb.camera import CameraUnavailable, make_frame
 from test_local import local
 
 
-@pytest.mark.parametrize('depth', [True, False])
-def test_detector_loop_publishes_paired_results_and_only_measures_depth_sources(local, monkeypatch, depth):
+@pytest.mark.parametrize('backend', ['orbbec', 'realsense', 'v4l2'])
+def test_detector_loop_publishes_paired_results_and_only_measures_depth_sources(local, monkeypatch, backend):
     store, camera, frame, result, runtime, _ = local
+    camera.backend = backend
+    depth = backend != 'v4l2'
     if not depth:
         camera.backend = 'v4l2'
         frame = make_frame(frame.color_rgb.copy(), None, None, None,

@@ -42,6 +42,11 @@ For an X11 desktop window with the same views and review controls:
 .venv/bin/python -m rgb.desktop
 ```
 
+For a move to another Ubuntu 24.04 amd64 system, build a local `.deb` with
+`python3 scripts/build-ubuntu-package.py`. See the
+[Ubuntu installer and migration guide](docs/ubuntu-installer.md) for bundled
+dependencies, USB access, and copying the archive and local models.
+
 Install the desktop menu entry and a command that works from any directory:
 
 ```sh

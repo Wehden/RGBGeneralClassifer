@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+case "$1" in
+    remove|purge)
+        if command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules || true
+        fi
+        ;;
+esac
+# Captures, model caches, credentials, and user virtualenvs belong to the user.

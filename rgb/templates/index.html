@@ -14,7 +14,7 @@
 <button id="pause-vlm" disabled>Pause VLM</button>{% if not local %}<button id="catch-up">Catch up</button><span id="catch-up-status" role="status"></span>{% endif %}</div><div class="status-line"><span id="vlm-state" role="status">Connecting…</span><span id="vlm-backlog" role="status">Queue unknown</span>{% if local %}<span id="provider-status" role="status"></span><span id="provider-latency"></span>{% endif %}</div></section>
 </div>
 <div class="workspace">
-<section class="live panel"><div class="panelhead"><h1>Live</h1><select id="source" aria-label="Camera source"></select></div><div class="camera">{% if local %}
+<section class="live panel"><div class="panelhead"><h1>Live</h1><select id="source" aria-label="Camera source"{% if local %} hidden{% endif %}></select>{% if local %}<select id="camera-select" aria-label="Active camera" disabled><option>Finding cameras…</option></select>{% endif %}</div>{% if local %}<span id="camera-selection-status" class="status" role="status" aria-live="polite"></span>{% endif %}<div class="camera">{% if local %}
 <select id="camera-channel" hidden aria-hidden="true" tabindex="-1"><option value="color">RGB</option><option value="depth">Depth</option><option value="ir">IR</option><option value="pointcloud">3D</option></select>
 <div id="view-switch" class="view-switch" role="group" aria-label="Camera view" hidden>
 <button type="button" data-channel="color" title="RGB" aria-label="RGB view" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="4"/><path d="m8 6 2-3h4l2 3"/></svg></button>

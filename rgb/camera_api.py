@@ -12,7 +12,7 @@ from uuid import UUID
 
 import cv2
 from flask import Response, jsonify, request, send_file
-from rgb.camera import CameraUnavailable, FrameExpired, jpg, png
+from rgb.camera import CameraBusy, CameraUnavailable, FrameExpired, jpg, png
 from rgb.local_store import ArchiveConflict, QueueFull
 from common.geometry import bounds
 from rgb.pointcloud import PointCloudBuilder
@@ -35,6 +35,8 @@ class CameraAPI:
         app.register_error_handler(sqlite3.Error,lambda exc:(jsonify(error='Archive storage unavailable'),503))
         app.register_error_handler(OSError,lambda exc:(jsonify(error='Archive storage unavailable'),503))
         app.add_url_rule('/api/camera/status','camera_status',self.status)
+        app.add_url_rule('/api/camera/devices','camera_devices',self.devices)
+        app.add_url_rule('/api/camera/select','camera_select',self.select,methods=['POST'])
         app.add_url_rule('/api/camera/calibration','camera_calibration',self.calibration)
         app.add_url_rule('/api/camera/<channel>/stream','camera_stream',self.stream_response)
         app.add_url_rule('/api/camera/<channel>/snapshot.jpg','camera_snapshot',self.snapshot)
@@ -76,6 +78,24 @@ class CameraAPI:
         return jsonify(**status,stream_viewers=self.active,
                        views=status['channels']+(['pointcloud'] if self.camera.backend in {'orbbec','realsense'} and 'depth' in status['channels'] else []),
                        configuration={**self.runtime.configuration,'archive_interval_s':settings['capture_interval_s']})
+
+    def devices(self):
+        from rgb.camera_devices import catalog
+        return jsonify(catalog(self.camera))
+
+    def select(self):
+        if not request.is_json or request.headers.get('X-RGB-Request')!='camera-select':
+            return jsonify(error='Expected camera selection request'),400
+        if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc!=request.host:
+            return jsonify(error='Origin mismatch'),403
+        data=request.get_json(silent=True)
+        if (not isinstance(data,dict) or set(data)!={'camera_id'}
+                or not isinstance(data['camera_id'],str) or not 1<=len(data['camera_id'])<=128):
+            return jsonify(error='Expected camera_id from the connected camera list'),400
+        try:self.runtime.select_camera(data['camera_id'])
+        except ValueError as exc:return jsonify(error=str(exc)),404
+        except CameraBusy as exc:return jsonify(error=str(exc)),409
+        return self.devices()
 
     def calibration(self):
         frame,error=self._frame()
@@ -141,6 +161,8 @@ class CameraAPI:
         if not self.slots.acquire(blocking=False):return jsonify(error='Viewer limit reached'),429
         with self.lock:self.active+=1
         released=False
+        stop_event=self.camera.stop_event
+        session_id=frame.metadata['session_id']
         def release():
             nonlocal released
             with self.lock:
@@ -149,9 +171,10 @@ class CameraAPI:
         def generate():
             previous=None;sent=None
             try:
-                while not self.camera.stop_event.is_set():
+                while not stop_event.is_set():
                     try:f=self.camera.wait(previous,1)
                     except CameraUnavailable:return
+                    if f.metadata['session_id']!=session_id or channel not in f.previews:return
                     if previous==f.id:continue
                     previous=f.id
                     image=f.previews[channel]

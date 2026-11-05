@@ -200,14 +200,14 @@ environment; existing kernel drivers and firmware stay managed by the system.
 rgb-console -- --camera-backend realsense --no-vlm
 ```
 
-The Femto Bolt remains the default backend. One runner owns one camera and one
-archive. Close the owning service before switching backends; attaching a new
-desktop window uses the already running service. Both camera types use the
+The Femto Bolt remains the default backend. One runner owns one active camera
+and one archive. Use the live camera dropdown to switch attached cameras;
+attaching a new desktop window uses the already running service. Both camera types use the
 same dashboard, SQLite settings/evidence, detection/material pipeline, and
 explicit cloud review controls.
 
-When several RealSense cameras are connected, select the SDK-reported serial
-with `--camera-serial`. On the attached D415, the SDK camera serial differs from
+Use the SDK-reported serial with `--camera-serial` to pin a startup choice.
+On the attached D415, the SDK camera serial differs from
 the USB descriptor/ASIC serial. Native RealSense and V4L2 capture lock the
 physical USB identity together. Close RealSense Viewer before capture.
 
@@ -244,12 +244,40 @@ channel skew was 0.6 ms. A manual observation preserved device metadata and
 native 8-bit IR, and the shared lock blocked simultaneous V4L2 capture. This
 check used the pinned fallback detector with cloud inference disabled.
 
+## Switching attached cameras
+
+The dropdown above the live preview lists physical Femto Bolts, RealSense
+cameras, and USB webcams. Names include the physical USB identity to distinguish
+identical models. Native depth, IR, and metadata device nodes belong to their
+camera and do not appear as separate choices. Discovery reads sysfs without
+opening capture streams and refreshes with the console's 10-second status poll.
+
+With one connected, active camera the dropdown is disabled. With several
+cameras it enables automatically. If the active camera is unplugged, another
+connected camera can replace it even when only one remains. Switching stops
+the current capture worker and releases its physical lock before starting the
+selected camera. An unfinished shutdown prevents a second capture worker from
+opening; a target locked by another runner restores the previous selection.
+Driver and stream errors remain visible, and the selector remains available.
+
+The preview, available RGB/depth/IR/3D controls, and raw bit-depth labels update
+for the selected camera. Old streams end, cached frames expire, and detector
+tracks, live material readings, cloud overlays, and 3D frames reset for the new
+session. Saved observations and capture/VLM settings remain shared in the same
+archive. A switch alone never captures an observation or requests cloud inference.
+
+When no serial is supplied, startup chooses the first discovered camera of the
+requested backend. Selection applies to the current service; the next launch
+uses its backend/device/serial arguments again. The local service requires a
+loopback host; use SSH forwarding for access from another system.
+
 ## Direct camera API
 
 These calls require no credentials and create no model requests:
 
 ```sh
 curl -s http://127.0.0.1:8080/api/camera/status
+curl -s http://127.0.0.1:8080/api/camera/devices
 curl -s http://127.0.0.1:8080/api/camera/calibration
 curl -s http://127.0.0.1:8080/api/camera/detections
 curl http://127.0.0.1:8080/api/camera/color/snapshot.jpg -o /tmp/color.jpg
@@ -257,6 +285,15 @@ curl http://127.0.0.1:8080/api/camera/depth/raw.png -o /tmp/depth.png
 curl http://127.0.0.1:8080/api/camera/ir/raw.png -o /tmp/ir.png
 curl http://127.0.0.1:8080/api/camera/frame -o /tmp/bolt-frame.npz
 ```
+
+`GET /api/camera/devices` returns `cameras`, `active_id`, camera state, and
+any current error. Select a connected inventory ID using
+`POST /api/camera/select`, JSON `{"camera_id":"<id>"}`, and the header
+`X-RGB-Request: camera-select`. Requests with a different browser Origin are
+rejected. A successful response acknowledges the new owner and may still
+report `starting` until its first complete frame. Unknown/disconnected IDs
+return 404, physical ownership conflicts return 409, and an unfinished
+shutdown returns 503.
 
 `/{color,depth,ir}/stream` provides MJPEG, with eight concurrent viewers across
 channels. JPEG snapshots and stream parts identify their frame/session and

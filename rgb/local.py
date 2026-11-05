@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 from waitress import create_server
-from rgb.camera import Camera, CameraBusy, CameraLock, CameraUnavailable
+from rgb.camera import Camera, CameraBusy, CameraLock
 from rgb.local_runtime import LocalRuntime
 from rgb.local_store import LocalStore
 from rgb.web import create_app
@@ -67,6 +67,8 @@ def provider_settings(args,settings):
 
 def main():
     args=parser().parse_args()
+    if args.host not in {'127.0.0.1','localhost'}:
+        raise SystemExit('The local camera service requires --host 127.0.0.1')
     timings=[args.detector_fps,args.read_timeout,args.connect_timeout,args.freshness,args.vlm_min_interval]
     if not 1<=args.port<=65535 or not all(math.isfinite(v) for v in timings) or min(timings[:-1])<=0 or args.vlm_min_interval<0 or args.max_tokens<1:
         raise SystemExit('Invalid port, timing, or token limit')
@@ -82,10 +84,11 @@ def main():
     # Claim the archive before recovery can modify interrupted-job records.
     camera=Camera(serial=args.camera_serial,backend=args.camera_backend,device=args.camera_device,
                   fps=args.capture_fps,skew_ms=args.max_skew_ms,freshness_s=args.freshness)
+    from rgb.camera_devices import choose_default
+    choose_default(camera)
     try:
         state_lock=CameraLock('archive:'+str(Path(args.state_dir).expanduser().resolve()))
-        camera.reserve()
-    except (CameraBusy,CameraUnavailable) as exc:raise SystemExit(str(exc))
+    except CameraBusy as exc:raise SystemExit(str(exc))
     store=LocalStore(args.state_dir,analysis_enabled=not args.no_vlm)
     updates={}
     try:updates.update(provider_settings(args,store.settings()))
@@ -109,8 +112,9 @@ def main():
                          detector_device=args.detector_device,detector_threads=args.detector_threads,
                          material_dir=args.materials_model_dir,material_device=args.materials_device,
                          local_materials=not args.no_local_materials)
-    runtime.configuration.update(host=args.host,port=args.port,camera_backend=args.camera_backend,
-                                 camera_serial=args.camera_serial,capture_fps=args.capture_fps,
+    runtime.configuration.update(host=args.host,port=args.port,camera_backend=camera.backend,
+                                 camera_serial=camera.serial,active_camera_id=camera.selection_id,
+                                 camera_device=camera.device,capture_fps=args.capture_fps,
                                  max_channel_skew_ms=camera.skew_ms,freshness_s=camera.freshness_s,
                                  max_cached_frames=camera.max_frames,max_cache_bytes=camera.max_bytes,
                                  shutdown_deadline_s=10)

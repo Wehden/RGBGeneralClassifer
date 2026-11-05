@@ -21,6 +21,110 @@ function setup(){
 const json=body=>({ok:true,json:async()=>body});
 const preventDefault=()=>{};
 
+function cameras(active='bolt',entries=[
+  {id:'bolt',name:'Femto Bolt',usb_serial:'bolt-1',connected:true},
+  {id:'rs',name:'RealSense D415',usb_serial:'asic-1',connected:true},
+]){return {cameras:entries,active_id:active,state:'running',error:null};}
+
+test('local camera dropdown enables for physical cameras and distinguishes identical models',()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras('bolt',[{id:'bolt',name:'Femto Bolt',connected:true}]));
+  assert.equal(node('camera-select').disabled,true);
+  context.renderCameras(cameras());
+  assert.equal(node('camera-select').disabled,false);
+  context.renderCameras(cameras('rs',[
+    {id:'rs',name:'RealSense D415',usb_serial:'one',connected:true},
+    {id:'rs-two',name:'RealSense D415',usb_serial:'two',connected:true},
+  ]));
+  assert.deepEqual(node('camera-select').children.map(option=>option.textContent),
+    ['RealSense D415 · one','RealSense D415 · two']);
+  assert.equal(node('camera-select').value,'rs');
+});
+
+test('one remaining camera can replace a disconnected active camera; no devices disables switching',()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras('bolt',[
+    {id:'bolt',name:'Femto Bolt',connected:false},
+    {id:'rs',name:'RealSense D415',connected:true},
+  ]));
+  assert.equal(node('camera-select').disabled,false);
+  assert.equal(node('camera-select').children[0].disabled,true);
+  assert.match(node('camera-selection-status').textContent,/disconnected/);
+  context.renderCameras(cameras('bolt',[{id:'bolt',name:'Femto Bolt',connected:false}]));
+  assert.equal(node('camera-select').disabled,true);
+});
+
+test('camera selection posts an inventory ID and updates native IR capabilities',async()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras());node('camera-select').value='rs';
+  let posted;
+  context.fetch=async(url,options)=>{
+    if(options){posted={url,...options};return json(cameras('rs'));}
+    if(url==='/api/camera/status')return json({backend:'realsense',channels:['color','depth','ir'],views:['color','depth','ir','pointcloud'],raw_bit_depth:{ir:8}});
+    return new Promise(()=>{});
+  };
+  await context.selectCamera();
+  assert.equal(posted.url,'/api/camera/select');
+  assert.equal(posted.headers['X-RGB-Request'],'camera-select');
+  assert.deepEqual(JSON.parse(posted.body),{camera_id:'rs'});
+  assert.equal(node('camera-select').value,'rs');
+  assert.equal(node('camera-select').disabled,false);
+  assert.equal(context.rawLabel('ir'),'Raw 8-bit ir');
+});
+
+test('failed camera selection restores the actual selection and reports the failure',async()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras());node('camera-select').value='rs';
+  context.fetch=async(url,options)=>{
+    if(options)return {ok:false,status:409,json:async()=>({error:'Camera already owned'})};
+    if(url==='/api/camera/devices')return json(cameras());
+    return new Promise(()=>{});
+  };
+  await context.selectCamera();
+  assert.equal(node('camera-select').value,'bolt');
+  assert.equal(node('camera-select').disabled,false);
+  assert.match(node('camera-selection-status').textContent,/already owned/);
+});
+
+test('a pre-switch camera list response cannot restore the old active camera',async()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras());
+  let resolveList;
+  context.fetch=async(url,options)=>{
+    if(options)return json(cameras('rs'));
+    if(url==='/api/camera/status')return json({backend:'realsense',channels:['color']});
+    if(url==='/api/camera/devices')return new Promise(resolve=>{resolveList=resolve;});
+    return new Promise(()=>{});
+  };
+  const old=context.cameraDevices();
+  node('camera-select').value='rs';
+  await context.selectCamera();
+  resolveList(json(cameras()));
+  await old;
+  assert.equal(node('camera-select').value,'rs');
+});
+
+test('a camera without frames clears previous depth and IR view availability',()=>{
+  const {context,node}=setup();
+  for(const channel of ['color','depth','ir','pointcloud']){
+    const option=new Element('option');option.value=channel;node('camera-channel').append(option);
+    node('mode-'+channel).dataset.channel=channel;
+  }
+  node('camera-channel').value='depth';
+  context.renderCamera({backend:'realsense',state:'starting',channels:[]});
+  assert.equal(node('camera-channel').value,'color');
+  assert.equal(node('mode-depth').hidden,true);
+  assert.equal(node('view-switch').hidden,true);
+});
+
+test('a camera selected in another window updates even a focused dropdown',()=>{
+  const {context,node}=setup();
+  context.renderCameras(cameras());
+  context.document.activeElement=node('camera-select');
+  context.renderCameras(cameras('rs'));
+  assert.equal(node('camera-select').value,'rs');
+});
+
 const providerState=()=>({enabled:true,paused:false,selected_provider:'bedrock',selected_model:'us.amazon.nova-2-lite-v1:0',
   policy_revision:1,providers:[
     {id:'bedrock',label:'Amazon Bedrock',models:[{id:'us.amazon.nova-2-lite-v1:0',label:'Nova 2 Lite',selection_reason:'restore_primary'}]},

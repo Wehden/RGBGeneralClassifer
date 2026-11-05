@@ -63,8 +63,10 @@ camera-only operation.
 For the RealSense camera, start a new console/service with
 `rgb-console -- --camera-backend realsense` (or
 `.venv/bin/python -m rgb.local --camera-backend realsense --no-vlm`).
-Use the SDK-reported `--camera-serial` when multiple RealSense devices are
-connected. See [RealSense operation](docs/local-operations.md#realsense-cameras)
+The live camera dropdown enables when multiple cameras are attached and
+switches between the Bolt, RealSense, and USB webcams without restarting the
+service. Use the SDK-reported `--camera-serial` to pin a RealSense startup choice.
+See [RealSense operation](docs/local-operations.md#realsense-cameras)
 for streams, native IR, and calibration support.
 
 Automatic observations default to **one per minute**, with an editable saved

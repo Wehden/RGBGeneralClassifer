@@ -89,7 +89,8 @@ def test_actual_deb_build_extracts_launchers_rules_and_checksum(tmp_path, archit
         ["dpkg-deb", "--field", str(package), "Package", "Architecture", "Depends"], text=True)
     assert "Package: bolt-rgb" in fields and f"Architecture: {architecture}" in fields
     assert "python3.12-venv" in fields and "libxcb-cursor0" in fields
-    assert "libsnappy1v5" in fields and "libminizip1t64" in fields
+    assert all(name in fields for name in ["libsnappy1v5", "libminizip1t64", "libfontconfig1",
+                                           "libopus0", "libwebpdemux2", "libwebpmux3", "libxcb-dri3-0"])
     subprocess.run(
         ["dpkg-deb", "--raw-extract", str(package), str(tmp_path / "extracted")], check=True)
     extracted = tmp_path / "extracted"

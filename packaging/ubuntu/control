@@ -5,7 +5,7 @@ Priority: optional
 Architecture: {architecture}
 Maintainer: RGB Console maintainers <noreply@localhost>
 Installed-Size: {installed_size}
-Depends: python3.12, python3.12-venv, python3-tk, libc6 (>= 2.39), libstdc++6, libusb-1.0-0, libgl1, libegl1, libopengl0, libglib2.0-0t64, libnss3, libnspr4, libsnappy1v5, libminizip1t64, libasound2t64, libdbus-1-3, libx11-6, libx11-xcb1, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libxtst6, libxkbcommon-x11-0, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-keysyms1, libxcb-shape0, libxcb-xinerama0, libxcb-image0, libxcb-render-util0, libxcb-randr0, libxcb-render0, libxcb-sync1, libxcb-xfixes0, libxcb-xkb1, libxcb-shm0, libdrm2, libgbm1, udev
+Depends: python3.12, python3.12-venv, python3-tk, libc6 (>= 2.39), libstdc++6, libusb-1.0-0, libgl1, libegl1, libopengl0, libglib2.0-0t64, libnss3, libnspr4, libsnappy1v5, libminizip1t64, libfontconfig1, libopus0, libwebpdemux2, libwebpmux3, libxcb-dri3-0, libasound2t64, libdbus-1-3, libx11-6, libx11-xcb1, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libxtst6, libxkbcommon-x11-0, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-keysyms1, libxcb-shape0, libxcb-xinerama0, libxcb-image0, libxcb-render-util0, libxcb-randr0, libxcb-render0, libxcb-sync1, libxcb-xfixes0, libxcb-xkb1, libxcb-shm0, libdrm2, libgbm1, udev
 Description: Local RGB Console for Femto Bolt and RealSense cameras
  Desktop and loopback web console with RGB, depth, IR, point clouds,
  local object detection, and a per-user SQLite capture archive.

@@ -151,7 +151,7 @@ jobs:
       - name: Install production local / desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libegl1 libopengl0 libglib2.0-0 libusb-1.0-0 libnss3 libsnappy1v5 libminizip1t64 libasound2t64 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
+          sudo apt-get install -y --no-install-recommends xvfb libegl1 libopengl0 libglib2.0-0 libusb-1.0-0 libnss3 libsnappy1v5 libminizip1t64 libfontconfig1 libopus0 libwebpdemux2 libwebpmux3 libxcb-dri3-0 libasound2t64 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
           python -m pip install -r requirements-desktop.txt -r requirements-artifacts.txt -r requirements-test.txt
           python -m pip check
       - name: Qualify native Ubuntu package and offline user setup

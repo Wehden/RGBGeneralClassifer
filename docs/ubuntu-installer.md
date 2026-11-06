@@ -61,7 +61,8 @@ sudo. Setup can be run again safely; it resumes incomplete dependency
 installation and reuses a completed environment. Runtime cache keys include
 the architecture, packaged target receipt, and native Qt validation version.
 Setup imports WebEngine, not just the PySide6 package; ARM64 WebEngine
-requires the declared `libsnappy1v5` and `libminizip1t64` system libraries. Setup refuses a mismatched
+requires the declared codec, font, compression, and XCB libraries, including
+`libsnappy1v5` and `libminizip1t64`. Setup refuses a mismatched
 architecture, Python version, or Ubuntu release before invoking pip.
 Package staging normalizes directory/file permissions even under `umask 077`;
 private user runtime data still uses restrictive permissions.

@@ -88,7 +88,9 @@ class Detector:
             if list(graph.input(0).shape)!=[1,3,self.size,self.size] or graph.input(0).element_type!=ov.Type.f32:
                 raise ValueError('YOLOE input contract mismatch')
             gather_replacements=_openvino_gather_contract(graph)
-            options={'PERFORMANCE_HINT':'LATENCY','NUM_STREAMS':1,'INFERENCE_PRECISION_HINT':'f32'}
+            # Accuracy mode also disables reduced-precision internal optimizations on ARM.
+            options={'PERFORMANCE_HINT':'LATENCY','NUM_STREAMS':1,'INFERENCE_PRECISION_HINT':'f32',
+                     'EXECUTION_MODE_HINT':'ACCURACY'}
             if device=='CPU':options['INFERENCE_NUM_THREADS']=threads
             self.session=core.compile_model(graph,device,options)
             self.output_port=self.session.output(0)
@@ -109,7 +111,9 @@ class Detector:
         self.backend=backend
         vocabulary=json.dumps(self.labels,separators=(',',':'),ensure_ascii=False).encode()
         self.config={**{k:v for k,v in self.manifest.items() if k!='labels'},'label_count':len(self.labels),'vocabulary_sha256':hashlib.sha256(vocabulary).hexdigest(),'manifest_sha256':hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),'runtime':backend,'runtime_version':runtime_version,'provider':provider,'inference_threads':threads}
-        if backend=='openvino':self.config['gather_contract_replacements']=gather_replacements
+        if backend=='openvino':
+            self.config.update(gather_contract_replacements=gather_replacements,
+                               execution_mode='ACCURACY',inference_precision_hint='f32')
 
     def detect(self,frame,*,with_masks=False):
         tensor,transform=prepare(frame,self.size)

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import venv
@@ -14,10 +15,31 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 REQUIREMENTS = ("requirements.txt", "requirements-local.txt", "requirements-desktop.txt")
 
 
+def native_architecture():
+    aliases = {"x86_64":"amd64", "amd64":"amd64", "aarch64":"arm64", "arm64":"arm64"}
+    try:
+        return aliases[platform.machine().lower()]
+    except KeyError:
+        raise ValueError("Supported runtime architectures are amd64 and arm64") from None
+
+
+def validate_target(root):
+    target = json.loads((root / "package-target.json").read_text())
+    release = platform.freedesktop_os_release()
+    if target != {"schema_version":1, "architecture":native_architecture(), "python":"3.12",
+                  "distribution":"ubuntu", "release":"24.04"}:
+        raise ValueError("Package target does not match this host; install its native amd64/arm64 package")
+    if sys.version_info[:2] != (3, 12) or release.get("ID") != "ubuntu" or release.get("VERSION_ID") != "24.04":
+        raise ValueError("This package requires Python 3.12 on Ubuntu 24.04 amd64 or arm64")
+
+
 def runtime_directory(root=PACKAGE_ROOT):
     """Do not share or relocate the checkout's virtualenv."""
     digest = hashlib.sha256()
+    digest.update(b"native-qt-validation-v2")
     digest.update(sys.version.encode())
+    digest.update(native_architecture().encode())
+    digest.update((root / "package-target.json").read_bytes())
     for name in REQUIREMENTS:
         digest.update((root / name).read_bytes())
     wheels = root / "wheels.json"
@@ -25,7 +47,7 @@ def runtime_directory(root=PACKAGE_ROOT):
         digest.update(wheels.read_bytes())
     base = Path(os.environ.get(
         "BOLT_RGB_RUNTIME_DIR", str(Path.home() / ".local/share/bolt-rgb-runtime"))).expanduser()
-    return base / ("python-3.12-" + digest.hexdigest()[:20])
+    return base / ("python-3.12-" + native_architecture() + "-" + digest.hexdigest()[:20])
 
 
 def is_ready(directory):
@@ -53,6 +75,7 @@ def verify_wheels(root):
 
 
 def setup(root=PACKAGE_ROOT, *, offline=False):
+    validate_target(root)
     bundled = (root / "wheels.json").exists()
     if offline and not bundled:
         raise ValueError("This package has no bundled wheels; use a package built with --bundle-wheels")
@@ -78,7 +101,7 @@ def setup(root=PACKAGE_ROOT, *, offline=False):
         subprocess.run([python, "-m", "pip", "check"], check=True)
         # Import the actual local runtime; never acquire the camera or invoke a VLM.
         subprocess.run(
-            [python, "-c", "import rgb.local, PySide6, pyorbbecsdk, pyrealsense2, onnxruntime, openvino"],
+            [python, "-c", "import rgb.local, PySide6, pyorbbecsdk, pyrealsense2, onnxruntime, openvino; from PySide6.QtWebEngineCore import QWebEnginePage; from PySide6.QtWebEngineWidgets import QWebEngineView"],
             cwd=root, check=True)
         (directory / ".ready").write_text("Dependencies installed and imports verified.\n")
     print("Setup complete. Launch bolt-rgb, or bolt-rgb-service --no-vlm.", flush=True)
@@ -98,10 +121,11 @@ def main():
     if os.geteuid() == 0:
         raise SystemExit("Run this command as your normal user, without sudo.")
     if sys.version_info[:2] != (3, 12):
-        raise SystemExit("This package requires Python 3.12 on Ubuntu 24.04 amd64.")
+        raise SystemExit("This package requires Python 3.12 on Ubuntu 24.04 amd64 or arm64.")
     # Restrict newly created user state, logs, and captures.
     os.umask(0o077)
     try:
+        validate_target(PACKAGE_ROOT)
         if mode == "setup":
             setup(offline=offline)
             return

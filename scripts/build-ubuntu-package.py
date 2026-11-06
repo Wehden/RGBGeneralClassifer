@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a local Ubuntu 24.04 amd64 .deb without sudo or private runtime data."""
+"""Build a local Ubuntu 24.04 amd64/arm64 .deb without sudo or private runtime data."""
 import argparse
 import hashlib
 import json
@@ -16,6 +16,20 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "packaging/ubuntu"
 REQUIREMENTS = ("requirements.txt", "requirements-local.txt", "requirements-desktop.txt")
+
+
+def native_architecture(machine=None):
+    aliases = {"x86_64":"amd64", "amd64":"amd64", "aarch64":"arm64", "arm64":"arm64"}
+    try:
+        return aliases[(machine or platform.machine()).lower()]
+    except KeyError:
+        raise ValueError("Supported package architectures are amd64 and arm64") from None
+
+
+def normalize_permissions(stage):
+    # Package data is root-owned. A private build umask must not make it unreadable.
+    for path in [stage, *stage.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 
 
 def copy_file(source, destination, *, executable=False):
@@ -47,10 +61,10 @@ def stage_application(destination, root=ROOT):
         raise ValueError("The fallback detector does not match its manifest checksum")
 
 
-def bundle_wheels(application):
+def bundle_wheels(application, architecture):
     """Resolve native wheels on the supported build host, never copy a venv."""
-    if sys.version_info[:2] != (3, 12) or platform.machine() != "x86_64":
-        raise ValueError("--bundle-wheels requires Python 3.12 on an amd64 Linux build host")
+    if sys.version_info[:2] != (3, 12) or native_architecture() != architecture:
+        raise ValueError("--bundle-wheels requires native Python 3.12 on the target architecture")
     release = platform.freedesktop_os_release()
     if release.get("ID") != "ubuntu" or release.get("VERSION_ID") != "24.04":
         raise ValueError("Build bundled wheels on Ubuntu 24.04 to match the destination")
@@ -68,12 +82,18 @@ def bundle_wheels(application):
     (application / "wheels.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def stage_package(stage, version, *, bundled=False, root=ROOT):
+def stage_package(stage, version, *, architecture=None, bundled=False, root=ROOT):
+    architecture = architecture or native_architecture()
+    if architecture not in {"amd64", "arm64"}:
+        raise ValueError("Unsupported package architecture")
     application = stage / "opt/bolt-rgb"
     stage_application(application, root)
     copy_file(TEMPLATES / "launcher.py", application / "launcher.py")
+    (application / "package-target.json").write_text(json.dumps({
+        "schema_version":1, "architecture":architecture, "python":"3.12",
+        "distribution":"ubuntu", "release":"24.04"}, sort_keys=True) + "\n")
     if bundled:
-        bundle_wheels(application)
+        bundle_wheels(application, architecture)
     for command, mode in (("bolt-rgb", "desktop"), ("rgb-console", "desktop"),
                           ("bolt-rgb-service", "service"), ("bolt-rgb-setup", "setup")):
         path = stage / "usr/bin" / command
@@ -100,19 +120,22 @@ def stage_package(stage, version, *, bundled=False, root=ROOT):
     payload = [path for path in stage.rglob("*") if path.is_file() and control not in path.parents]
     size = sum(path.stat().st_size for path in payload)
     (control / "control").write_text((TEMPLATES / "control").read_text().format(
-        version=version, installed_size=(size + 1023) // 1024))
+        version=version, architecture=architecture, installed_size=(size + 1023) // 1024))
     checksums = []
     for path in sorted(payload):
         with path.open("rb") as stream:
             digest = hashlib.file_digest(stream, "md5").hexdigest()
         checksums.append(f"{digest}  {path.relative_to(stage)}\n")
     (control / "md5sums").write_text("".join(checksums))
+    normalize_permissions(stage)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=datetime.now(timezone.utc).strftime("0.%Y%m%d.1"),
                         help="Debian package version (default: 0.YYYYMMDD.1)")
+    parser.add_argument("--architecture", choices=["amd64", "arm64"],
+                        help="Target Debian architecture (default: native build host)")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
     parser.add_argument("--bundle-wheels", action="store_true",
                         help="Include verified native Python wheels for offline user setup")
@@ -121,12 +144,16 @@ def main():
         parser.error("--version must start with a digit and contain only letters, digits, . + or ~")
     if not shutil.which("dpkg-deb"):
         parser.error("dpkg-deb is required (Ubuntu package: dpkg)")
+    try:
+        architecture = args.architecture or native_architecture()
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    target = args.output_dir.resolve() / f"bolt-rgb_{args.version}_amd64.deb"
+    target = args.output_dir.resolve() / f"bolt-rgb_{args.version}_{architecture}.deb"
     # A failed build must leave an existing installer intact.
     with tempfile.TemporaryDirectory(prefix="bolt-rgb-deb-") as temporary:
         stage = Path(temporary) / "package"
-        stage_package(stage, args.version, bundled=args.bundle_wheels)
+        stage_package(stage, args.version, architecture=architecture, bundled=args.bundle_wheels)
         pending = Path(temporary) / target.name
         subprocess.run(
             ["dpkg-deb", "--root-owner-group", "-Zzstd", "-z3", "--build",

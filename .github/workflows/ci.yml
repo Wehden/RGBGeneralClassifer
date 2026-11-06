@@ -123,9 +123,17 @@ jobs:
           retention-days: 14
 
   local-runtime:
-    name: Local runtime / models, camera SDK and X11
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    name: Local runtime / models, camera SDK and X11 / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -143,9 +151,23 @@ jobs:
       - name: Install production local / desktop dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb libegl1 libopengl0 libglib2.0-0 libusb-1.0-0 libnss3 libasound2t64 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
+          sudo apt-get install -y --no-install-recommends xvfb libegl1 libopengl0 libglib2.0-0 libusb-1.0-0 libnss3 libsnappy1v5 libminizip1t64 libfontconfig1 libopus0 libwebpdemux2 libwebpmux3 libxcb-dri3-0 libasound2t64 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0
           python -m pip install -r requirements-desktop.txt -r requirements-artifacts.txt -r requirements-test.txt
           python -m pip check
+      - name: Qualify native Ubuntu package and offline user setup
+        run: |
+          umask 077
+          python scripts/build-ubuntu-package.py --version 0.0.1 --bundle-wheels --output-dir "$RUNNER_TEMP/rgb-packages"
+          package="$RUNNER_TEMP/rgb-packages/bolt-rgb_0.0.1_${{ matrix.arch }}.deb"
+          dpkg-deb --raw-extract "$package" "$RUNNER_TEMP/rgb-extracted"
+          export BOLT_RGB_RUNTIME_DIR="$RUNNER_TEMP/rgb-installer-runtime"
+          launcher="$RUNNER_TEMP/rgb-extracted/opt/bolt-rgb/launcher.py"
+          python "$launcher" setup --offline
+          python "$launcher" service --help
+          python "$launcher" desktop --help
+          mkdir -p ci-results
+          cp "$package.sha256" ci-results/installer.sha256
+          dpkg-deb --field "$package" > ci-results/installer-control.txt
       - name: Qualify actual ONNX / OpenVINO, material inference and SDK initialization
         run: |
           mkdir -p ci-results
@@ -166,7 +188,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: local-runtime-reports
+          name: local-runtime-${{ matrix.arch }}-reports
           path: ci-results/
           retention-days: 14
 

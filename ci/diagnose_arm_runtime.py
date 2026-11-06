@@ -1,10 +1,11 @@
 """Temporary native runner diagnostics for the ARM prototype parity failure."""
-import copy
+import sys
 from pathlib import Path
 import numpy as np
 import onnx
 import onnxruntime as ort
 import openvino as ov
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from board.yoloe import prepare, _openvino_gather_contract
 
 path = Path('models/yoloe-26n-pf-320/model.onnx')
@@ -33,4 +34,4 @@ for port, reference in zip(compiled.outputs, expected):
           'mismatches', np.count_nonzero(~np.isclose(output, reference, atol=.005,rtol=.005)), flush=True)
 for node in compiled.get_runtime_model().get_ordered_ops():
     info = node.get_rt_info()
-    print('EXEC', node.friendly_name, {key: str(info[key]) for key in info}, flush=True)
+    print('EXEC', node.friendly_name, {key: str(info[key].value) for key in info}, flush=True)

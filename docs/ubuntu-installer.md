@@ -1,11 +1,11 @@
 # Local Ubuntu installer
 
 The `bolt-rgb` Debian package targets **Ubuntu 24.04 LTS on Intel/AMD
-64-bit systems (amd64), with Python 3.12**. It installs RGB Console, its
+64-bit (amd64) and ARM64 (arm64/aarch64), with Python 3.12**. It installs RGB Console, its
 local web service, the pinned nano fallback detector, a desktop menu entry,
 and USB permission rules for the Femto Bolt and RealSense D415. The runtime uses the existing
 `requirements-desktop.txt` pins and an isolated, per-user virtualenv.
-ARM64 and other Ubuntu releases need separate dependency qualification.
+32-bit ARM and other Ubuntu releases are not supported by this installer.
 
 ## Build on the current system
 
@@ -15,12 +15,17 @@ From this checkout:
 python3 scripts/build-ubuntu-package.py
 ```
 
-This creates `dist/bolt-rgb_0.YYYYMMDD.1_amd64.deb` and a SHA-256 receipt.
+This detects the native build host and creates `dist/bolt-rgb_0.YYYYMMDD.1_amd64.deb`
+or `dist/bolt-rgb_0.YYYYMMDD.1_arm64.deb`, plus a SHA-256 receipt.
+Use `--architecture arm64` or `--architecture amd64` to build a small package
+for another architecture. The control metadata and packaged target receipt
+identify the selected architecture; this is not just a filename change.
 The small package downloads Python dependencies during user setup on the
 destination. Building needs `dpkg-deb`; it does not require sudo.
 
 For a move where Python dependencies should travel with the installer, build
-on Ubuntu 24.04 amd64 with Python 3.12 and pip:
+on Ubuntu 24.04 with Python 3.12 and pip, on the **same architecture as the
+destination** (ventunoq for ARM64, an Intel/AMD host for amd64):
 
 ```sh
 .venv/bin/python scripts/build-ubuntu-package.py --bundle-wheels
@@ -28,7 +33,7 @@ on Ubuntu 24.04 amd64 with Python 3.12 and pip:
 
 This includes the complete resolved wheel set, including the Orbbec and RealSense SDK bindings,
 ONNX Runtime, OpenVINO, and Qt. Setup verifies each wheel's SHA-256 and uses
-only those files. The bundled package is much larger. Build either variant
+only those files. Cross-architecture wheel bundling is rejected. The bundled package is much larger. Build either variant
 with an explicit version for upgrades, for example `--version 0.20261105.2`.
 Each build replaces the same-version output file.
 
@@ -40,11 +45,12 @@ are excluded.
 ## Install and run on the destination
 
 Copy the `.deb` and its `.deb.sha256` file to the destination and run from
-their directory, substituting the filename printed by the build:
+their directory, substituting the filename printed by the build. Use `arm64`
+on ventunoq; `dpkg --print-architecture` reports the destination architecture:
 
 ```sh
-sha256sum -c bolt-rgb_0.20261105.1_amd64.deb.sha256
-sudo apt install ./bolt-rgb_0.20261105.1_amd64.deb
+sha256sum -c bolt-rgb_0.20261106.1_arm64.deb.sha256
+sudo apt install ./bolt-rgb_0.20261106.1_arm64.deb
 bolt-rgb-setup
 bolt-rgb
 ```
@@ -52,7 +58,13 @@ bolt-rgb
 APT installs Python's venv support, libusb, and the Qt/X11/WebEngine system
 libraries. Run setup and the console as the normal desktop user, without
 sudo. Setup can be run again safely; it resumes incomplete dependency
-installation and reuses a completed environment.
+installation and reuses a completed environment. Runtime cache keys include
+the architecture, packaged target receipt, and native Qt validation version.
+Setup imports WebEngine, not just the PySide6 package; ARM64 WebEngine
+requires the declared `libsnappy1v5` and `libminizip1t64` system libraries. Setup refuses a mismatched
+architecture, Python version, or Ubuntu release before invoking pip.
+Package staging normalizes directory/file permissions even under `umask 077`;
+private user runtime data still uses restrictive permissions.
 For a bundled package, `bolt-rgb-setup --offline` explicitly requires offline
 Python setup. APT still needs Ubuntu packages from its repositories or a
 previously populated cache: bundling Python wheels does not make installation
@@ -159,3 +171,21 @@ purge preserve all user archives, model caches, credentials, and virtualenvs.
 An earlier checkout launcher in `~/.local/bin/rgb-console` or desktop entry in
 `~/.local/share/applications/` may still take precedence over the packaged
 entry. Use `/usr/bin/bolt-rgb` to select the installed package explicitly.
+
+
+## ARM64 qualification on ventunoq
+
+The November 6 ARM64 check used ventunoq running Ubuntu 24.04, Python 3.12,
+and its native aarch64 wheels. Both the small package and the 508 MiB
+bundled-wheel package installed through APT. Normal-user setup passed;
+a fresh bundled setup also passed inside a network namespace with no network
+interfaces, using only the package's verified wheels.
+
+The installed Qt/WebEngine console rendered the real dashboard and Records
+against the isolated synthetic service under Xvfb, then closed without stopping
+the attached service. Camera SDK, ONNX Runtime, and OpenVINO imports passed.
+No physical Bolt/D415 capture or depth accuracy was established on this host.
+The test did not start a hardware camera service or perform cloud inference.
+Private archives, credentials, and model caches were not packaged or migrated.
+Native amd64 and ARM64 CI lanes repeat package building/offline setup, actual
+model runtime checks, SDK initialization, and the X11 lifecycle check.

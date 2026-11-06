@@ -51,23 +51,6 @@ def test_yoloe_real_runtimes_agree_before_decoding(detectors):
         match = candidates[np.argmin(distance)]
         assert np.min(distance) < .5
         assert abs(float(match[4] - row[4])) < .005
-    if len(outputs_ort) > 1 and not np.allclose(
-            outputs_vino[vino.session.output(1)], outputs_ort[1], atol=.005, rtol=.005):
-        model_path = next(directory / 'model.onnx' for directory in (ROOT / 'models').iterdir()
-                          if (directory / 'model.onnx').is_file() and hashlib.sha256(
-                              (directory / 'model.onnx').read_bytes()).hexdigest() == ort.sha256)
-        for level in [onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL,
-                      onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC]:
-            options = onnxruntime.SessionOptions()
-            options.intra_op_num_threads = 2
-            options.graph_optimization_level = level
-            options.add_session_config_entry('mlas.enable_gemm_fastmath_arm64_bfloat16', '0')
-            session = onnxruntime.InferenceSession(
-                str(model_path), sess_options=options, providers=['CPUExecutionProvider'])
-            proto = session.run(None, {ort.input_name: tensor})[1]
-            print('DIAGNOSTIC', level, 'vs optimized ORT',
-                  float(np.max(np.abs(proto - outputs_ort[1]))), 'vs OpenVINO',
-                  float(np.max(np.abs(proto - outputs_vino[vino.session.output(1)]))))
     if len(outputs_ort) > 1:
         np.testing.assert_allclose(
             outputs_vino[vino.session.output(1)], outputs_ort[1], atol=.005, rtol=.005)

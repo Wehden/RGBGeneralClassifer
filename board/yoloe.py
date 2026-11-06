@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import platform
 import time
 from pathlib import Path
 
@@ -70,6 +71,40 @@ def _openvino_gather_contract(graph):
     return replacements
 
 
+def _openvino_arm_upsample_contract(graph):
+    """Avoid ARM ACL deconvolution drift for disjoint 2x2/stride-2 kernels.
+
+    Each input pixel maps to its own 2x2 output tile: a channel matrix
+    multiplication followed by interleaving is mathematically equivalent.
+    Leave overlapping, padded, grouped, and dynamic operations untouched.
+    """
+    from openvino import opset13 as ops
+    replacements=0
+    for node in graph.get_ordered_ops():
+        if node.get_type_name()!='ConvolutionBackpropData':continue
+        if not node.get_input_partial_shape(0).is_static or not node.get_input_partial_shape(1).is_static:continue
+        source=list(node.get_input_shape(0));weights=list(node.get_input_shape(1))
+        attrs=node.get_attributes()
+        if (len(source)!=4 or len(weights)!=4 or weights[2:]!=[2,2]
+            or attrs['strides']!=[2,2] or attrs['dilations']!=[1,1]
+            or attrs['pads_begin']!=[0,0] or attrs['pads_end']!=[0,0]
+            or attrs['output_padding']!=[0,0]):continue
+        n,c,h,w=source;out_channels=weights[1]
+        if weights[0]!=c or list(node.get_output_shape(0))!=[n,out_channels,h*2,w*2]:continue
+        pixels=ops.transpose(node.input_value(0),[0,2,3,1])
+        kernel=ops.reshape(node.input_value(1),[c,out_channels*4],False)
+        tiles=ops.matmul(pixels,kernel,False,False)
+        tiles=ops.reshape(tiles,[n,h,w,out_channels,2,2],False)
+        interleaved=ops.transpose(tiles,[0,3,1,4,2,5])
+        replacement=ops.reshape(interleaved,[n,out_channels,h*2,w*2],False)
+        replacement.set_friendly_name(node.get_friendly_name())
+        replacement.output(0).set_names(node.output(0).get_names())
+        node.output(0).replace(replacement.output(0))
+        replacements+=1
+    graph.validate_nodes_and_infer_types()
+    return replacements
+
+
 class Detector:
     def __init__(self,model,manifest,threshold=.45,backend='onnxruntime',device='CPU',threads=None):
         self.threshold=threshold
@@ -88,6 +123,9 @@ class Detector:
             if list(graph.input(0).shape)!=[1,3,self.size,self.size] or graph.input(0).element_type!=ov.Type.f32:
                 raise ValueError('YOLOE input contract mismatch')
             gather_replacements=_openvino_gather_contract(graph)
+            upsample_replacements=0
+            if device=='CPU' and platform.machine().lower() in {'aarch64','arm64'}:
+                upsample_replacements=_openvino_arm_upsample_contract(graph)
             # Accuracy mode also disables reduced-precision internal optimizations on ARM.
             options={'PERFORMANCE_HINT':'LATENCY','NUM_STREAMS':1,'INFERENCE_PRECISION_HINT':'f32',
                      'EXECUTION_MODE_HINT':'ACCURACY'}
@@ -113,6 +151,7 @@ class Detector:
         self.config={**{k:v for k,v in self.manifest.items() if k!='labels'},'label_count':len(self.labels),'vocabulary_sha256':hashlib.sha256(vocabulary).hexdigest(),'manifest_sha256':hashlib.sha256(Path(manifest).read_bytes()).hexdigest(),'runtime':backend,'runtime_version':runtime_version,'provider':provider,'inference_threads':threads}
         if backend=='openvino':
             self.config.update(gather_contract_replacements=gather_replacements,
+                               arm_upsample_contract_replacements=upsample_replacements,
                                execution_mode='ACCURACY',inference_precision_hint='f32')
 
     def detect(self,frame,*,with_masks=False):

@@ -82,7 +82,8 @@ def _openvino_arm_upsample_contract(graph):
     replacements=0
     for node in graph.get_ordered_ops():
         if node.get_type_name()!='ConvolutionBackpropData':continue
-        if not node.get_input_partial_shape(0).is_static or not node.get_input_partial_shape(1).is_static:continue
+        if (not node.get_input_partial_shape(0).is_static or not node.get_input_partial_shape(1).is_static
+            or not node.get_output_partial_shape(0).is_static):continue
         source=list(node.get_input_shape(0));weights=list(node.get_input_shape(1))
         attrs=node.get_attributes()
         if (len(source)!=4 or len(weights)!=4 or weights[2:]!=[2,2]

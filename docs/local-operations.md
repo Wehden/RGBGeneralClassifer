@@ -179,6 +179,12 @@ Run `--help` for timing/profile options. Application environment names include
 `RGB_READ_TIMEOUT`, `RGB_CONNECT_TIMEOUT`, `RGB_MAX_TOKENS`,
 `RGB_MAX_SKEW_MS`, and `RGB_FRESHNESS_S`.
 
+If the selected camera is busy or unavailable at startup, the service keeps
+its API accessible and retries acquisition automatically, with delays from
+1 to 30 seconds. Releasing the other runner's camera lock or reconnecting the
+device restores capture without changing the dropdown selection. Switching
+cameras or shutting down cancels the previous camera's retry worker.
+
 VLM dispatch within a sampled observation has no one-Hz ceiling. New automatic
 observations follow the saved capture interval. The default detector target
 is 5 FPS and the default synchronized sensor profiles are 15 FPS. These are

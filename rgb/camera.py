@@ -202,8 +202,12 @@ class Camera:
     def name(self):
         return self.info.get('name') or (v4l2_name(self.device) if self.backend=='v4l2' else 'Camera')
 
-    def start(self):
-        self.reserve()
+    def start(self,retry_acquisition=False):
+        try:self.reserve()
+        except (CameraBusy,CameraUnavailable) as exc:
+            if not retry_acquisition:raise
+            self.state='busy' if isinstance(exc,CameraBusy) else 'unavailable'
+            self.error=str(exc)
         self.thread=threading.Thread(target=self._run,name='camera',daemon=True)
         self.thread.start()
 
@@ -346,6 +350,7 @@ class Camera:
         while not self.stop_event.is_set():
             accepted_before=self.counters['accepted']
             try:
+                self.reserve()
                 if self.backend=='orbbec':self._orbbec()
                 elif self.backend=='basler':
                     from rgb.basler import capture
@@ -355,11 +360,9 @@ class Camera:
                     capture(self)
                 else:self._v4l2()
                 delay=1
-            except CameraBusy as exc:
-                self.state='busy';self.error=str(exc)
-                break
             except Exception as exc:
-                self.state='unavailable';self.error=f'{type(exc).__name__}: {str(exc)[:250]}'
+                self.state='busy' if isinstance(exc,CameraBusy) else 'unavailable'
+                self.error=str(exc) if isinstance(exc,CameraBusy) else f'{type(exc).__name__}: {str(exc)[:250]}'
                 self.counters['reconnects']+=1
                 if self.counters['accepted']>accepted_before:delay=1
                 if self.stop_event.wait(delay):break

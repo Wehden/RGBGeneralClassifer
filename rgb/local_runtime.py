@@ -98,7 +98,7 @@ class LocalRuntime:
                             'read_timeout_s':read_timeout,'connect_timeout_s':connect_timeout,'max_tokens':max_tokens}
 
     def start(self):
-        try:self.camera.start()
+        try:self.camera.start(retry_acquisition=True)
         except (CameraBusy,CameraUnavailable) as exc:
             self.camera.state='busy' if isinstance(exc,CameraBusy) else 'unavailable'
             self.camera.error=str(exc)

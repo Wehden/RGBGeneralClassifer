@@ -82,9 +82,10 @@ def make_service(directory, depth=True, cameras=False):
     runtime._attach_material(frame, detection)
     event = runtime.archive(frame, result)
     inventory = [{'id': backend, 'backend': backend,
-                      'name': {'orbbec': 'Synthetic Bolt', 'realsense': 'Synthetic D415', 'v4l2': 'Synthetic webcam'}[backend],
+                      'name': {'orbbec': 'Synthetic Bolt', 'realsense': 'Synthetic D415',
+                               'basler': 'Synthetic Basler', 'v4l2': 'Synthetic webcam'}[backend],
                       'serial': backend, 'usb_serial': backend, 'device': '/dev/synthetic',
-                      'connected': True} for backend in ['orbbec', 'realsense', 'v4l2']]
+                      'connected': True} for backend in ['orbbec', 'realsense', 'basler', 'v4l2']]
     if not cameras:
         inventory = [item for item in inventory if item['backend'] == camera.backend]
     camera_devices.discover = lambda: deepcopy(inventory)
@@ -101,7 +102,7 @@ def make_service(directory, depth=True, cameras=False):
             camera.info = {'name': selection['name']}
             camera.session_id = str(uuid4())
             meta = {**metadata, 'frame_id': str(uuid4()), 'session_id': camera.session_id, 'device': camera.info}
-            native_depth = plane.copy() if camera.backend != 'v4l2' else None
+            native_depth = plane.copy() if camera.backend in {'orbbec', 'realsense'} else None
             native_ir = (plane.astype(np.uint8) if camera.backend == 'realsense'
                          else plane.copy() if native_depth is not None else None)
             fresh = make_frame(color.copy(), native_depth, native_ir,

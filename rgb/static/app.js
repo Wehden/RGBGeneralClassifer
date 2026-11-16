@@ -98,12 +98,12 @@ function renderCamera(camera) {
   const select=$('camera-channel');
   if(!select)return;
   const supported=new Set(camera.views||camera.channels||[]);
-  if(camera.backend==='v4l2'){supported.clear();supported.add('color');}
+  if(['v4l2','basler'].includes(camera.backend)){supported.clear();supported.add('color');}
   if(!supported.size)supported.add('color');
   for(const option of select.querySelectorAll('option'))option.hidden=option.disabled=!supported.has(option.value);
   for(const button of document.querySelectorAll('[data-channel]'))button.hidden=!supported.has(button.dataset.channel);
   if($('view-switch'))$('view-switch').hidden=supported.size<2;
-  if($('calibration-link'))$('calibration-link').hidden=camera.backend==='v4l2';
+  if($('calibration-link'))$('calibration-link').hidden=['v4l2','basler'].includes(camera.backend);
   if(!supported.has(select.value)){select.value='color';live();}
   if($('raw-link')&&!$('raw-link').hidden)$('raw-link').textContent=rawLabel(select.value==='pointcloud'?'depth':select.value);
   syncViewIcons();

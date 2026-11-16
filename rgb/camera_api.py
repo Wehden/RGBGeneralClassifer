@@ -105,7 +105,7 @@ class CameraAPI:
 
     def snapshot(self,channel):
         if channel not in {'color','depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2' and channel!='color':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'} and channel!='color':return 'Channel unsupported',404
         frame,error=self._frame()
         if error:return error
         if channel not in frame.previews:return jsonify(error='Channel unsupported by this backend'),404
@@ -114,7 +114,7 @@ class CameraAPI:
 
     def raw(self,channel):
         if channel not in {'depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'}:return 'Channel unsupported',404
         frame,error=self._frame()
         if error:return error
         array=getattr(frame,channel+'_native')
@@ -155,7 +155,7 @@ class CameraAPI:
 
     def stream_response(self,channel,overlay=False):
         if channel not in {'color','depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2' and channel!='color':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'} and channel!='color':return 'Channel unsupported',404
         frame=self.camera.get()
         if channel not in frame.previews:return 'Channel unsupported',404
         if not self.slots.acquire(blocking=False):return jsonify(error='Viewer limit reached'),429
@@ -185,7 +185,11 @@ class CameraAPI:
                                 and latest[0].color_rgb.shape==f.color_rgb.shape
                                 and time.monotonic()-latest[0].metadata['received_monotonic_s']<=self.camera.freshness_s):
                             f,result=latest
-                            color=cv2.cvtColor(f.color_rgb,cv2.COLOR_RGB2BGR)
+                            color=f.color_rgb
+                            preview=f.metadata.get('color_preview')
+                            if preview:
+                                color=cv2.resize(color,(preview['width'],preview['height']),interpolation=cv2.INTER_AREA)
+                            color=cv2.cvtColor(color,cv2.COLOR_RGB2BGR)
                             for d in result['detections']:
                                 x1,y1,x2,y2=bounds(d['box'],color.shape[1],color.shape[0])
                                 label=d.get('display_label',d.get('live_value',{}).get('display_label',d['label']))
@@ -219,7 +223,7 @@ class CameraAPI:
         return jsonify(observation_id=event['event_id'],event_id=event['event_id'],frame_id=event['frame_id']),201
 
     def pointcloud(self):
-        if self.camera.backend=='v4l2':return 'Registered depth unsupported',404
+        if self.camera.backend in {'v4l2','basler'}:return 'Registered depth unsupported',404
         try:
             stride=int(request.args.get('stride','6'))
             max_range=float(request.args.get('max_range_m','5'))

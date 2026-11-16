@@ -2,8 +2,8 @@
 
 CI and release verification: [hosted qualification matrix and local reproduction](docs/ci-qualification.md).
 
-**RGB Console** supports Linux USB webcams, the **Orbbec Femto Bolt**, and
-the **RealSense D415** through the native librealsense Python binding,
+**RGB Console** supports Linux USB webcams, the **Basler acA5472-17uc**
+through pylon, and the **Orbbec Femto Bolt** and **RealSense D415**
 with color, registered depth, and native IR. Visual review uses **Nova 2 Lite
 on Amazon Bedrock** by default through
 the `default` AWS profile. **OpenRouter** also supports Nova 2 Lite, Nova Lite,

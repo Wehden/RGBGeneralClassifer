@@ -187,6 +187,34 @@ detector time, pending replacement counts, model outcomes, and workload-specific
 request latency. Latency windows hold 60 successes per workload, with at most
 128 recent workload groups. Fewer than 20 samples is provisional evidence.
 
+## Basler USB cameras
+
+The Basler acA5472-17uc (`2676:ba02`) uses the pinned `pypylon` binding
+in `requirements-local.txt`. It has no V4L2 `/dev/video` interface.
+Select **Basler acA5472-17uc** from the camera dropdown, or start with:
+
+```sh
+.venv/bin/python -m rgb.local --camera-backend basler --camera-serial 23854255 --no-vlm
+```
+
+The backend selects the physical USB serial and holds the same singleton lock
+as other camera backends. It acquires continuous images, converts the sensor's
+pixel format to 8-bit RGB, and copies pixels before releasing SDK buffers.
+Preview uses up to 4× sensor binning where available, retaining the field of
+view, and requests the configured capture FPS within camera limits.
+Exposure, gain and white balance use automatic control when available.
+These changes apply to the open session and do not save a camera user set.
+For high resolution sensors, JPEG previews and live overlays use a maximum
+dimension of 1280 pixels; the NPZ frame bundle retains the acquired resolution.
+Metadata records both the acquisition profile and resized preview dimensions.
+
+The camera provides RGB only; depth, IR and 3D views are unavailable.
+Factory geometric calibration is not assumed, and raw SDK timestamp ticks
+are retained separately from host receive timestamps.
+The installer includes a device-specific USB permission rule granting the
+active local desktop user and `video` group access. Reconnect after installing
+the rule. Close pylon Viewer before acquiring the same camera in the console.
+
 ## RealSense cameras
 
 The native RealSense backend is qualified against the attached **D415** with

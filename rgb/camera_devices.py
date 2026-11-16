@@ -28,6 +28,7 @@ def discover():
             product = (path / 'idProduct').read_text().strip().lower()
             name = (path / 'product').read_text().strip()
             backend = ('orbbec' if (vendor, product) == ('2bc5', '066b')
+                       else 'basler' if (vendor, product) == ('2676', 'ba02')
                        else 'realsense' if vendor == '8086' and 'realsense' in name.lower() else None)
             if backend is None:
                 continue
@@ -35,9 +36,10 @@ def discover():
             native.add(physical)
             if physical.startswith('usb:'):
                 continue  # Native SDK selection needs a verified serial/ASIC identity.
-            label = 'Femto Bolt' if backend == 'orbbec' else 'RealSense D415' if '415' in name else name
+            label = ('Femto Bolt' if backend == 'orbbec' else 'Basler ' + name if backend == 'basler'
+                     else 'RealSense D415' if '415' in name else name)
             cameras.append({'id': identifier(backend, physical), 'name': label, 'backend': backend,
-                            'serial': physical if backend == 'orbbec' else None,
+                            'serial': physical if backend in {'orbbec', 'basler'} else None,
                             'usb_serial': physical, 'device': None, 'connected': True})
         except OSError:
             continue

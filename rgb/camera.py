@@ -116,11 +116,18 @@ class Frame:
         return data.getvalue()
 
 
-def make_frame(color_bgr,depth,ir,registered,metadata,color_jpeg=None):
+def make_frame(color_bgr,depth,ir,registered,metadata,color_jpeg=None,color_preview_max_size=None):
     color=cv2.cvtColor(color_bgr,cv2.COLOR_BGR2RGB)
+    display_color=color_bgr
+    if color_preview_max_size and max(color.shape[:2])>color_preview_max_size:
+        scale=color_preview_max_size/max(color.shape[:2])
+        display_color=cv2.resize(color_bgr,(round(color.shape[1]*scale),round(color.shape[0]*scale)),
+                                 interpolation=cv2.INTER_AREA)
+        metadata['color_preview']={'width':display_color.shape[1],'height':display_color.shape[0],
+                                   'resized':True}
     metadata['raw_bit_depth']={name:array.dtype.itemsize*8 for name,array in
                                [('depth',depth),('ir',ir)] if array is not None}
-    previews={'color':color_jpeg if color_jpeg is not None else jpg(color_bgr)}
+    previews={'color':color_jpeg if color_jpeg is not None else jpg(display_color)}
     if depth is not None:
         display_depth=registered if registered is not None else depth
         scale=metadata.get('registered_depth_scale_mm',metadata['depth_scale_mm']) if registered is not None else metadata['depth_scale_mm']
@@ -203,6 +210,10 @@ class Camera:
     def reserve(self):
         """Use passive USB identity discovery before opening the SDK/device."""
         if self.lock is not None:return
+        if self.backend=='basler':
+            from rgb.basler import reserve
+            reserve(self)
+            return
         if self.backend=='realsense':
             from rgb.realsense import reserve
             reserve(self)
@@ -336,6 +347,9 @@ class Camera:
             accepted_before=self.counters['accepted']
             try:
                 if self.backend=='orbbec':self._orbbec()
+                elif self.backend=='basler':
+                    from rgb.basler import capture
+                    capture(self)
                 elif self.backend=='realsense':
                     from rgb.realsense import capture
                     capture(self)

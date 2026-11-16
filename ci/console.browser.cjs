@@ -82,8 +82,8 @@ async function fixture(rgbOnly){
           assert.equal(raw.status(),200);
           assert.equal(raw.headers()['x-rgb-plane'],'depth_native');
           assert.equal(await page.locator('#camera-select').isEnabled(),true);
-          assert.equal(await page.locator('#camera-select option').count(),3);
-          for(const [backend,bits] of [['realsense',8],['v4l2',null],['orbbec',16]]){
+          assert.equal(await page.locator('#camera-select option').count(),4);
+          for(const [backend,bits] of [['realsense',8],['basler',null],['v4l2',null],['orbbec',16]]){
             const switched=page.waitForResponse(response=>response.url().endsWith('/api/camera/select'));
             await page.selectOption('#camera-select',backend);
             assert.equal((await switched).status(),200);

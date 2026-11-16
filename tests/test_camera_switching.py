@@ -16,7 +16,8 @@ from test_local import local
 
 def device(backend, physical):
     return {'id': camera_devices.identifier(backend, physical), 'backend': backend,
-            'name': {'orbbec': 'Femto Bolt', 'realsense': 'RealSense D415', 'v4l2': 'USB webcam'}[backend],
+            'name': {'orbbec': 'Femto Bolt', 'realsense': 'RealSense D415',
+                     'basler': 'Basler acA5472-17uc', 'v4l2': 'USB webcam'}[backend],
             'serial': None if backend == 'realsense' else physical,
             'usb_serial': physical, 'device': '/dev/video12' if backend == 'v4l2' else None,
             'connected': True}
@@ -26,7 +27,8 @@ def device(backend, physical):
 def switching(local, monkeypatch, tmp_path):
     store, camera, frame, result, runtime, app = local
     monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
-    inventory = [device('orbbec', 'bolt-1'), device('realsense', 'rs-asic-1'), device('v4l2', 'webcam-1')]
+    inventory = [device('orbbec', 'bolt-1'), device('realsense', 'rs-asic-1'), device('v4l2', 'webcam-1'),
+                 device('basler', 'basler-1')]
     monkeypatch.setattr(camera_devices, 'discover', lambda: deepcopy(inventory))
     active, transitions = set(), []
 
@@ -41,9 +43,9 @@ def switching(local, monkeypatch, tmp_path):
             metadata = {**frame.metadata, 'frame_id': str(uuid4()), 'session_id': camera.session_id,
                         'backend': backend, 'device': camera.info}
             camera.publish(make_frame(frame.color_rgb.copy(),
-                frame.depth_native.copy() if backend != 'v4l2' else None,
-                frame.ir_native.astype(np.uint8 if backend == 'realsense' else np.uint16) if backend != 'v4l2' else None,
-                frame.depth_registered.copy() if backend != 'v4l2' else None, metadata))
+                frame.depth_native.copy() if backend in {'orbbec', 'realsense'} else None,
+                frame.ir_native.astype(np.uint8 if backend == 'realsense' else np.uint16) if backend in {'orbbec', 'realsense'} else None,
+                frame.depth_registered.copy() if backend in {'orbbec', 'realsense'} else None, metadata))
             camera.stop_event.wait()
         finally:
             active.remove(backend)
@@ -52,6 +54,7 @@ def switching(local, monkeypatch, tmp_path):
     monkeypatch.setattr(camera, '_orbbec', capture)
     monkeypatch.setattr(camera, '_v4l2', capture)
     monkeypatch.setattr('rgb.realsense.capture', lambda selected: capture())
+    monkeypatch.setattr('rgb.basler.capture', lambda selected: capture())
     camera.select(inventory[0])
     with camera.condition:
         assert camera.condition.wait_for(lambda: bool(camera.frames), 2)
@@ -116,6 +119,22 @@ def test_switch_to_webcam_removes_depth_capabilities(switching):
     assert client.get('/api/camera/color/snapshot.jpg').status_code == 200
 
 
+def test_switch_to_basler_and_back_restores_native_depth_views(switching):
+    store, camera, _, _, _, app, inventory, _ = switching
+    settings = store.settings()
+    client = app.test_client()
+    for choice, views in [(inventory[3], ['color']), (inventory[0], ['color', 'depth', 'ir', 'pointcloud'])]:
+        assert select(client, choice).status_code == 200
+        with camera.condition:
+            assert camera.condition.wait_for(lambda: bool(camera.frames), 2)
+        assert client.get('/api/camera/status').json['views'] == views
+        if choice['backend'] == 'basler':
+            assert client.get('/api/camera/depth/raw.png').status_code == 404
+            assert client.get('/api/camera/ir/snapshot.jpg').status_code == 404
+            assert client.get('/api/camera/pointcloud').status_code == 404
+        assert store.settings() == settings
+
+
 def test_busy_target_restores_previous_owner_and_service_remains_available(switching):
     _, camera, _, _, _, app, inventory, transitions = switching
     lock = CameraLock('rs-asic-1')
@@ -137,7 +156,7 @@ def test_same_camera_is_noop_and_disconnected_target_does_not_stop_capture(switc
     client = app.test_client()
     assert select(client, inventory[0]).status_code == 200
     assert camera.get().id == previous.id and transitions == [('start', 'orbbec')]
-    disconnected = inventory.pop()
+    disconnected = inventory.pop(2)
     assert select(client, disconnected).status_code == 404
     assert camera.get().id == previous.id
     runtime.stop_event.set()
@@ -231,6 +250,7 @@ def test_discovery_deduplicates_native_planes_and_groups_serialless_webcam(tmp_p
     bolt = usb(usb_root, '4-2', '2bc5', '066b', 'Orbbec Femto Bolt', 'bolt')
     real = usb(usb_root, '2-3', '8086', '0ad3', 'Intel RealSense Depth Camera 415', 'asic')
     webcam = usb(usb_root, '2-4', '1234', '5678', 'Webcam')
+    basler = usb(usb_root, '4-3', '2676', 'ba02', 'acA5472-17uc', '23854255')
     usb(usb_root, '2-5', '8086', 'ffff', 'Bluetooth', 'other')
     usb(usb_root, '2-6', '8086', '0ad3', 'RealSense', '')  # Unverified native identity.
     for name in ['video0', 'video2', 'video4']: video(video_root, name, real)
@@ -239,9 +259,11 @@ def test_discovery_deduplicates_native_planes_and_groups_serialless_webcam(tmp_p
     video(video_root, 'video9', webcam, index=1)  # Metadata node.
     video(video_root, 'video10', webcam)  # Another interface on the same webcam.
     video(video_root, 'video11', tmp_path / 'missing')
+    video(video_root, 'video12', basler)  # Native cameras never become duplicate webcams.
     cameras = camera_devices.discover()
-    assert len(cameras) == 3
-    assert [item['backend'] for item in cameras] == ['realsense', 'orbbec', 'v4l2']
+    assert len(cameras) == 4
+    assert [item['backend'] for item in cameras] == ['realsense', 'orbbec', 'basler', 'v4l2']
+    assert cameras[2]['name'] == 'Basler acA5472-17uc' and cameras[2]['serial'] == '23854255'
     generic = cameras[-1]
     assert generic['usb_serial'] == 'usb:2-4'
     assert generic['device'] in {'/dev/video8', '/dev/video10'}

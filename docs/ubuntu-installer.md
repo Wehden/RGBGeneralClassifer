@@ -59,7 +59,8 @@ previously populated cache: bundling Python wheels does not make installation
 on an unprepared machine entirely offline.
 
 Reconnect the camera after installation. The permission rule applies only
-to the Femto Bolt (`2bc5:066b`) and RealSense D415 (`8086:0ad3`), grants the active local desktop user access,
+to the Femto Bolt (`2bc5:066b`), RealSense D415 (`8086:0ad3`) and
+Basler acA5472-17uc (`2676:ba02`), grants the active local desktop user access,
 and gives the `video` group read/write access. For a headless or SSH-only
 user, add that account to `video`, then log out and in:
 
@@ -90,12 +91,17 @@ librealsense kernel drivers and firmware are managed by the destination system.
 Use the SDK-reported `--camera-serial` for device selection; the USB/ASIC serial
 can differ. Close RealSense Viewer before starting console capture.
 When multiple cameras are attached, select the active camera from the live
-preview dropdown. It switches between Bolt, RealSense, and USB webcam capture
+preview dropdown. It switches between Bolt, RealSense, Basler, and USB webcam capture
 without restarting the service and preserves the archive and saved settings.
 The D415 supplies RGB, native uint16 depth, native uint8 left IR, and depth
 registered to the color camera for the 3D viewer.
 See [RealSense operation](local-operations.md#realsense-cameras) for calibration
 and measurement limitations.
+
+The Basler binding is included in both installer variants. Select the
+acA5472-17uc from the dropdown or use `--camera-backend basler`.
+It supplies RGB only. See [Basler operation](local-operations.md#basler-usb-cameras)
+for capture and permission details.
 
 The service is available at `http://127.0.0.1:8080`. The packaged service
 command always binds to loopback. The desktop uses the existing attach/start

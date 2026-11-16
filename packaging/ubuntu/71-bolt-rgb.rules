@@ -1,4 +1,6 @@
-# Femto Bolt and RealSense D415. uaccess grants the active desktop user access.
+# Femto Bolt, RealSense D415 and Basler acA5472-17uc.
+# uaccess grants the active desktop user access.
 # Headless users can join the video group instead.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2bc5", ATTR{idProduct}=="066b", MODE="0660", GROUP="video", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="8086", ATTR{idProduct}=="0ad3", MODE="0660", GROUP="video", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2676", ATTR{idProduct}=="ba02", MODE="0660", GROUP="video", TAG+="uaccess"

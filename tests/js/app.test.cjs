@@ -117,6 +117,21 @@ test('a camera without frames clears previous depth and IR view availability',()
   assert.equal(node('view-switch').hidden,true);
 });
 
+test('Basler camera offers RGB only and hides geometric calibration controls',()=>{
+  const {context,node}=setup();
+  for(const channel of ['color','depth','ir','pointcloud']){
+    const option=new Element('option');option.value=channel;node('camera-channel').append(option);
+    node('mode-'+channel).dataset.channel=channel;
+  }
+  node('camera-channel').value='depth';
+  context.renderCamera({backend:'basler',channels:['color'],views:['color']});
+  assert.equal(node('camera-channel').value,'color');
+  assert.equal(node('mode-color').hidden,false);
+  for(const channel of ['depth','ir','pointcloud'])assert.equal(node('mode-'+channel).hidden,true);
+  assert.equal(node('view-switch').hidden,true);
+  assert.equal(node('calibration-link').hidden,true);
+});
+
 test('a camera selected in another window updates even a focused dropdown',()=>{
   const {context,node}=setup();
   context.renderCameras(cameras());

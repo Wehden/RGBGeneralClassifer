@@ -8,6 +8,7 @@
   "board/transport.py": 75,
   "board/yoloe.py": 45,
   "rgb/agreement.py": 91,
+  "rgb/basler.py": 90,
   "rgb/camera.py": 75,
   "rgb/camera_devices.py": 90,
   "rgb/camera_api.py": 81,

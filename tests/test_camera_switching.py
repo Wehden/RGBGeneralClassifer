@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
+import cv2
 import pytest
 
 from rgb import camera_devices
@@ -320,16 +321,67 @@ def test_detector_and_material_completion_from_previous_session_cannot_publish(l
     assert runtime.material_comparison is None
 
 
-def test_serialless_v4l2_identity_uses_physical_usb_port(tmp_path, monkeypatch):
-    parent = usb(tmp_path, '2-7', '1234', '5678', 'Webcam', '')
-    video(tmp_path / 'video', 'video0', parent)
+@pytest.mark.parametrize('serial',[None,'','webcam-serial'])
+@pytest.mark.parametrize('hub_serial',[None,'hub-serial'])
+def test_v4l2_discovery_capture_and_alias_locks_ignore_ancestor_hub_serials(tmp_path, monkeypatch,serial,hub_serial):
+    monkeypatch.setenv('XDG_RUNTIME_DIR',str(tmp_path))
+    usb_root,video_root=tmp_path/'usb',tmp_path/'video'
+    monkeypatch.setattr(camera_devices,'USB_ROOT',usb_root)
+    monkeypatch.setattr(camera_devices,'VIDEO_ROOT',video_root)
+    root=usb(usb_root,'usb1','1d6b','0002','Root hub','controller-serial')
+    hub=usb(root,'1-4','05e3','0610','USB hub',hub_serial)
+    first=usb(hub,'1-4.1','1234','5678','Webcam',serial)
+    second=usb(hub,'1-4.2','1234','5678','Webcam')
+    video(video_root,'video0',first)
+    video(video_root,'video2',second)
+    physical={'/sys/class/video4linux/video0/device':first,
+              '/sys/class/video4linux/video2/device':second}
+    alias='/dev/v4l/by-id/webcam-fixture'
     original = Path.resolve
     def resolve(path, *args, **kwargs):
-        if str(path).startswith('/sys/class/video4linux/video0/device'):
-            return parent
+        if str(path) in physical:return physical[str(path)]
+        if str(path)==alias:return Path('/dev/video0')
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, 'resolve', resolve)
-    assert v4l2_serial('/dev/video0') == 'usb:2-7'
+    monkeypatch.setattr('rgb.camera.v4l2_name',lambda device:'Webcam')
+    choices=camera_devices.discover()
+    assert len(choices)==2
+    selected=choices[0]
+    assert selected['usb_serial']==v4l2_serial('/dev/video0')==v4l2_serial(alias)==(serial or 'usb:1-4.1')
+    assert choices[1]['usb_serial']==v4l2_serial('/dev/video2')=='usb:1-4.2'
+    camera=Camera()
+    opened,released=[],[]
+    class Capture:
+        def __init__(self,device,backend):
+            assert backend==cv2.CAP_V4L2
+            opened.append(device)
+            self.reads=0
+        def set(self,*args):pass
+        def get(self,key):
+            return cv2.VideoWriter_fourcc(*'MJPG') if key==cv2.CAP_PROP_FOURCC else 15
+        def read(self):
+            self.reads+=1
+            if self.reads==1:return True,np.full((12,16,3),[10,20,30],np.uint8)
+            camera.stop_event.wait()
+            return False,None
+        def release(self):released.append(True)
+    monkeypatch.setattr('rgb.camera.cv2.VideoCapture',Capture)
+    other=Camera(backend='v4l2',device='/dev/video2',serial=choices[1]['serial'])
+    try:
+        camera.select(selected)
+        with camera.condition:
+            assert camera.condition.wait_for(lambda:bool(camera.frames),2)
+        frame=camera.get()
+        assert opened==['/dev/video0'] and frame.metadata['device']['serial']==selected['usb_serial']
+        assert frame.color_rgb[0,0].tolist()==[30,20,10]
+        with pytest.raises(CameraBusy):
+            Camera(backend='v4l2',device=alias,serial=selected['serial']).reserve()
+        # Distinct webcams sharing a hub must not share its physical lock.
+        other.reserve()
+    finally:
+        other.stop()
+        camera.stop()
+    assert released==[True] and not camera.thread.is_alive()
 
 
 def test_startup_chooses_one_native_camera_without_overriding_explicit_cli_selection(monkeypatch):

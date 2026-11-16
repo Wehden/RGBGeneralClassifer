@@ -166,6 +166,8 @@ An explicitly selected V4L2 fallback provides color only:
 `--camera-backend v4l2 --camera-device /dev/video0`.
 Depth/IR endpoints then return 404. V4L2 aliases resolve to the physical USB
 serial for ownership.
+Serialless webcams use their nearest physical USB device's port identity;
+serial numbers belonging to an ancestor hub or host controller are ignored.
 If the SDK has detached a V4L2 kernel node, specify `--camera-serial` to identify
 the intended physical camera. An unidentifiable node fails startup explicitly;
 a raw Y16/Z16 depth node is not accepted as a color camera.

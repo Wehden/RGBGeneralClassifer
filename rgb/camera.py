@@ -39,10 +39,6 @@ def v4l2_name(device):
 
 def v4l2_serial(device):
     node=Path('/sys/class/video4linux')/Path(device).resolve().name/'device'
-    for parent in [node.resolve(),*node.resolve().parents]:
-        if (parent/'serial').exists():
-            serial=(parent/'serial').read_text().strip()
-            if serial:return serial
     from rgb.camera_devices import usb_identity
     try:return usb_identity(node)
     except OSError:pass

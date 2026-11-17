@@ -127,3 +127,68 @@ def test_instance_masks_remain_aligned_when_a_selected_mask_has_bad_coefficients
     assert model.instance_masks[1][20,20] and not model.instance_masks[1][5,5]
     assert all(set(d)=={'class_id','label','confidence','box'} for d in found)
     assert all(set(d)=={'class_id','label','confidence','box'} for d in model.proposals)
+
+
+@pytest.fixture
+def arm_upsample_graph(monkeypatch):
+    """Evaluate the rewrite's standard graph operations without a native SDK."""
+    import sys
+    from types import SimpleNamespace
+    class Tensor:
+        def __init__(self, value):self.value=np.asarray(value)
+        def set_friendly_name(self, name):self.name=name
+        def output(self, index):return self
+        def set_names(self, names):self.names=names
+    def value(item):return item.value if isinstance(item,Tensor) else item
+    ops=SimpleNamespace(
+        transpose=lambda data, axes:Tensor(np.transpose(value(data),axes)),
+        reshape=lambda data, shape, special_zero:Tensor(np.reshape(value(data),shape)),
+        matmul=lambda left, right, ta, tb:Tensor(np.matmul(value(left),value(right))))
+    monkeypatch.setitem(sys.modules,'openvino',SimpleNamespace(opset13=ops))
+    pixels=np.arange(12,dtype=np.float32).reshape(1,2,2,3)/3
+    weights=np.arange(24,dtype=np.float32).reshape(2,3,2,2)/7
+    node=Mock()
+    node.get_type_name.return_value='ConvolutionBackpropData'
+    node.get_input_partial_shape.return_value.is_static=True
+    node.get_output_partial_shape.return_value.is_static=True
+    node.get_input_shape.side_effect=lambda index:[pixels.shape,weights.shape][index]
+    node.input_value.side_effect=lambda index:[pixels,weights][index]
+    node.get_output_shape.return_value=[1,3,4,6]
+    node.get_attributes.return_value={'strides':[2,2],'dilations':[1,1],
+        'pads_begin':[0,0],'pads_end':[0,0],'output_padding':[0,0]}
+    graph=Mock();graph.get_ordered_ops.return_value=[node]
+    return graph,node,pixels,weights
+
+
+def test_arm_disjoint_upsampling_matches_independent_scatter_reference(arm_upsample_graph):
+    from board.yoloe import _openvino_arm_upsample_contract
+    graph,node,pixels,weights=arm_upsample_graph
+    expected=np.zeros((1,3,4,6),np.float32)
+    # Direct transposed convolution: scatter each channel's weighted 2x2 tile.
+    for channel in range(2):
+        for y in range(2):
+            for x in range(3):
+                expected[0,:,2*y:2*y+2,2*x:2*x+2]+=pixels[0,channel,y,x]*weights[channel]
+    assert _openvino_arm_upsample_contract(graph)==1
+    replacement=node.output.return_value.replace.call_args.args[0]
+    np.testing.assert_allclose(replacement.value,expected,rtol=1e-6,atol=1e-6)
+    assert replacement.names==node.output.return_value.get_names.return_value
+    graph.validate_nodes_and_infer_types.assert_called_once()
+
+
+@pytest.mark.parametrize('unsupported',['overlap','padding','dilation','output_padding',
+                                       'dynamic_input','dynamic_output','grouped','different_output'])
+def test_arm_upsampling_preserves_unsupported_graphs(arm_upsample_graph,unsupported):
+    from board.yoloe import _openvino_arm_upsample_contract
+    graph,node,_,_=arm_upsample_graph
+    attrs=node.get_attributes.return_value
+    if unsupported=='overlap':attrs['strides']=[1,1]
+    elif unsupported=='padding':attrs['pads_begin']=[1,1]
+    elif unsupported=='dilation':attrs['dilations']=[2,2]
+    elif unsupported=='output_padding':attrs['output_padding']=[1,1]
+    elif unsupported=='dynamic_input':node.get_input_partial_shape.return_value.is_static=False
+    elif unsupported=='dynamic_output':node.get_output_partial_shape.return_value.is_static=False
+    elif unsupported=='grouped':node.get_type_name.return_value='GroupConvolutionBackpropData'
+    elif unsupported=='different_output':node.get_output_shape.return_value=[1,3,8,12]
+    assert _openvino_arm_upsample_contract(graph)==0
+    node.output.return_value.replace.assert_not_called()

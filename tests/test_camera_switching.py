@@ -460,6 +460,68 @@ def test_startup_failure_recovers_without_reselecting_the_only_camera(local, mon
     assert not camera.thread.is_alive() and all(not thread.is_alive() for thread in runtime.threads)
 
 
+@pytest.mark.parametrize('failure', ['busy', 'unavailable'])
+def test_busy_target_restores_previous_acquisition_retry(local, monkeypatch, tmp_path, failure):
+    store, camera, frame, _, runtime, app = local
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
+    old, target = device('basler', 'retry-old'), device('orbbec', 'locked-target')
+    inventory = [old, target] if failure == 'busy' else [target]
+    monkeypatch.setattr(camera_devices, 'discover', lambda: deepcopy(inventory))
+    camera.backend = old['backend']
+    camera.serial = camera.usb_serial = old['usb_serial']
+    camera.selection_id = old['id']
+    camera.frames.clear();camera.latest_detection=None
+    settings = store.settings()
+    captures = []
+
+    def capture(selected):
+        captures.append(selected.serial)
+        selected.session_id = str(uuid4())
+        metadata = {**frame.metadata, 'frame_id': str(uuid4()), 'session_id': selected.session_id,
+                    'received_monotonic_s': time.monotonic()}
+        selected.publish(make_frame(frame.color_rgb.copy(), None, None, None, metadata))
+        selected.stop_event.wait()
+
+    monkeypatch.setattr('rgb.basler.capture', capture)
+    monkeypatch.setattr(camera, '_orbbec', lambda: captures.append('unexpected-target'))
+    owner = CameraLock(old['usb_serial']) if failure == 'busy' else None
+    target_owner = CameraLock(target['usb_serial'])
+    try:
+        camera.start(retry_acquisition=True)
+        previous_worker = camera.thread
+        client = app.test_client()
+        response = select(client, target)
+        assert response.status_code == 409 and target['usb_serial'] in response.json['error']
+        assert not previous_worker.is_alive()
+        assert camera.thread is not previous_worker and camera.thread.is_alive()
+        assert camera.state == ('busy' if failure == 'busy' else 'unavailable')
+        assert camera.error and camera.fatal_error is None
+        assert client.get('/api/camera/devices').json['active_id'] == old['id']
+        assert runtime.configuration['camera_backend'] == old['backend']
+        assert client.get('/healthz').status_code == 200
+        assert client.get('/api/camera/color/snapshot.jpg').status_code == 503
+        assert not captures
+        if owner:
+            owner.close()
+        else:
+            inventory.append(old)
+        target_owner.close()
+        with camera.condition:
+            assert camera.condition.wait_for(lambda: bool(camera.frames), 5)
+        assert captures == [old['serial']]
+        assert camera.state == 'running' and camera.error is None
+        assert client.get('/api/camera/color/snapshot.jpg').status_code == 200
+        assert store.settings() == settings
+    finally:
+        if owner:owner.close()
+        target_owner.close()
+        camera.stop()
+    assert not camera.thread.is_alive()
+    for choice in (old, target):
+        lock = CameraLock(choice['usb_serial'])
+        lock.close()
+
+
 def test_switch_while_waiting_for_startup_lock_stops_the_old_retry_worker(monkeypatch,tmp_path):
     monkeypatch.setenv('XDG_RUNTIME_DIR',str(tmp_path))
     old,target = device('orbbec','busy-old'),device('orbbec','available-new')

@@ -286,9 +286,7 @@ class Camera:
             except Exception:
                 self.stop()
                 prepare(previous)
-                physical=previous['usb_serial'] or previous['serial']
-                if physical:self.lock=CameraLock(physical)
-                self.start()
+                self.start(retry_acquisition=True)
                 raise
         finally:self.lifecycle_lock.release()
 

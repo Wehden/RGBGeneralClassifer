@@ -31,6 +31,12 @@ def reserve(camera):
     if camera.lock is not None:
         return
     candidates = usb_serials()
+    selected = getattr(camera, 'usb_serial', None)
+    if selected:
+        if selected not in candidates:
+            raise CameraUnavailable('Selected RealSense USB camera is disconnected')
+        camera.lock = CameraLock(selected)
+        return
     if len(candidates) > 1 and camera.serial is None:
         raise CameraUnavailable('Multiple RealSense cameras found; select --camera-serial')
     if len(candidates) == 1:
@@ -123,6 +129,9 @@ def capture(camera):
     devices = list(context.query_devices())
     if camera.serial:
         devices = [d for d in devices if d.get_info(rs.camera_info.serial_number) == camera.serial]
+    elif getattr(camera, 'usb_serial', None):
+        devices = [d for d in devices if d.supports(rs.camera_info.asic_serial_number)
+                   and d.get_info(rs.camera_info.asic_serial_number) == camera.usb_serial]
     if len(devices) != 1:
         raise CameraUnavailable('No matching unique RealSense device; select --camera-serial')
     device = devices[0]

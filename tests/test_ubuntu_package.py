@@ -87,6 +87,7 @@ def test_actual_deb_build_extracts_launchers_rules_and_checksum(tmp_path):
     rule = (extracted / "usr/lib/udev/rules.d/71-bolt-rgb.rules").read_text()
     assert 'MODE="0660"' in rule and 'TAG+="uaccess"' in rule and '"066b"' in rule
     assert '"8086"' in rule and '"0ad3"' in rule
+    assert '"2676"' in rule and '"ba02"' in rule
     assert not (extracted / "opt/bolt-rgb/.venv").exists()
     receipt = package.with_suffix(".deb.sha256").read_text().split()
     assert receipt == [hashlib.sha256(package.read_bytes()).hexdigest(), package.name]

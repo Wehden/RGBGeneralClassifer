@@ -122,10 +122,15 @@
       this.started=performance.now();this.frames=0;this.previousFrame=null;
       this.status('Connecting to the RGB-D point cloud…');this.poll(generation);
     }
-    stop() {
+    stop(clearFrame=false) {
       this.active=false;this.generation++;
       clearTimeout(this.timer);if(this.request)this.request.abort();
       if(this.renderHandle)cancelAnimationFrame(this.renderHandle);this.renderPending=false;
+      if(clearFrame){
+        this.frame=null;this.initialized=false;this.previousFrame=null;
+        if(this.gl)this.gl.clear(this.gl.COLOR_BUFFER_BIT|this.gl.DEPTH_BUFFER_BIT);
+        else this.context?.clearRect(0,0,this.canvas.width,this.canvas.height);
+      }
     }
     async poll(generation) {
       if(!this.active||generation!==this.generation)return;

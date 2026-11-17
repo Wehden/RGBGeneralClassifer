@@ -166,6 +166,8 @@ An explicitly selected V4L2 fallback provides color only:
 `--camera-backend v4l2 --camera-device /dev/video0`.
 Depth/IR endpoints then return 404. V4L2 aliases resolve to the physical USB
 serial for ownership.
+Serialless webcams use their nearest physical USB device's port identity;
+serial numbers belonging to an ancestor hub or host controller are ignored.
 If the SDK has detached a V4L2 kernel node, specify `--camera-serial` to identify
 the intended physical camera. An unidentifiable node fails startup explicitly;
 a raw Y16/Z16 depth node is not accepted as a color camera.
@@ -179,6 +181,12 @@ Run `--help` for timing/profile options. Application environment names include
 `RGB_READ_TIMEOUT`, `RGB_CONNECT_TIMEOUT`, `RGB_MAX_TOKENS`,
 `RGB_MAX_SKEW_MS`, and `RGB_FRESHNESS_S`.
 
+If the selected camera is busy or unavailable at startup, the service keeps
+its API accessible and retries acquisition automatically, with delays from
+1 to 30 seconds. Releasing the other runner's camera lock or reconnecting the
+device restores capture without changing the dropdown selection. Switching
+cameras or shutting down cancels the previous camera's retry worker.
+
 VLM dispatch within a sampled observation has no one-Hz ceiling. New automatic
 observations follow the saved capture interval. The default detector target
 is 5 FPS and the default synchronized sensor profiles are 15 FPS. These are
@@ -186,6 +194,34 @@ independent of Bedrock latency. Status reports delivered capture rate,
 detector time, pending replacement counts, model outcomes, and workload-specific
 request latency. Latency windows hold 60 successes per workload, with at most
 128 recent workload groups. Fewer than 20 samples is provisional evidence.
+
+## Basler USB cameras
+
+The Basler acA5472-17uc (`2676:ba02`) uses the pinned `pypylon` binding
+in `requirements-local.txt`. It has no V4L2 `/dev/video` interface.
+Select **Basler acA5472-17uc** from the camera dropdown, or start with:
+
+```sh
+.venv/bin/python -m rgb.local --camera-backend basler --camera-serial 23854255 --no-vlm
+```
+
+The backend selects the physical USB serial and holds the same singleton lock
+as other camera backends. It acquires continuous images, converts the sensor's
+pixel format to 8-bit RGB, and copies pixels before releasing SDK buffers.
+Preview uses up to 4× sensor binning where available, retaining the field of
+view, and requests the configured capture FPS within camera limits.
+Exposure, gain and white balance use automatic control when available.
+These changes apply to the open session and do not save a camera user set.
+For high resolution sensors, JPEG previews and live overlays use a maximum
+dimension of 1280 pixels; the NPZ frame bundle retains the acquired resolution.
+Metadata records both the acquisition profile and resized preview dimensions.
+
+The camera provides RGB only; depth, IR and 3D views are unavailable.
+Factory geometric calibration is not assumed, and raw SDK timestamp ticks
+are retained separately from host receive timestamps.
+The installer includes a device-specific USB permission rule granting the
+active local desktop user and `video` group access. Reconnect after installing
+the rule. Close pylon Viewer before acquiring the same camera in the console.
 
 ## RealSense cameras
 
@@ -200,14 +236,14 @@ environment; existing kernel drivers and firmware stay managed by the system.
 rgb-console -- --camera-backend realsense --no-vlm
 ```
 
-The Femto Bolt remains the default backend. One runner owns one camera and one
-archive. Close the owning service before switching backends; attaching a new
-desktop window uses the already running service. Both camera types use the
+The Femto Bolt remains the default backend. One runner owns one active camera
+and one archive. Use the live camera dropdown to switch attached cameras;
+attaching a new desktop window uses the already running service. Both camera types use the
 same dashboard, SQLite settings/evidence, detection/material pipeline, and
 explicit cloud review controls.
 
-When several RealSense cameras are connected, select the SDK-reported serial
-with `--camera-serial`. On the attached D415, the SDK camera serial differs from
+Use the SDK-reported serial with `--camera-serial` to pin a startup choice.
+On the attached D415, the SDK camera serial differs from
 the USB descriptor/ASIC serial. Native RealSense and V4L2 capture lock the
 physical USB identity together. Close RealSense Viewer before capture.
 
@@ -244,12 +280,40 @@ channel skew was 0.6 ms. A manual observation preserved device metadata and
 native 8-bit IR, and the shared lock blocked simultaneous V4L2 capture. This
 check used the pinned fallback detector with cloud inference disabled.
 
+## Switching attached cameras
+
+The dropdown above the live preview lists physical Femto Bolts, RealSense
+cameras, and USB webcams. Names include the physical USB identity to distinguish
+identical models. Native depth, IR, and metadata device nodes belong to their
+camera and do not appear as separate choices. Discovery reads sysfs without
+opening capture streams and refreshes with the console's 10-second status poll.
+
+With one connected, active camera the dropdown is disabled. With several
+cameras it enables automatically. If the active camera is unplugged, another
+connected camera can replace it even when only one remains. Switching stops
+the current capture worker and releases its physical lock before starting the
+selected camera. An unfinished shutdown prevents a second capture worker from
+opening; a target locked by another runner restores the previous selection.
+Driver and stream errors remain visible, and the selector remains available.
+
+The preview, available RGB/depth/IR/3D controls, and raw bit-depth labels update
+for the selected camera. Old streams end, cached frames expire, and detector
+tracks, live material readings, cloud overlays, and 3D frames reset for the new
+session. Saved observations and capture/VLM settings remain shared in the same
+archive. A switch alone never captures an observation or requests cloud inference.
+
+When no serial is supplied, startup chooses the first discovered camera of the
+requested backend. Selection applies to the current service; the next launch
+uses its backend/device/serial arguments again. The local service requires a
+loopback host; use SSH forwarding for access from another system.
+
 ## Direct camera API
 
 These calls require no credentials and create no model requests:
 
 ```sh
 curl -s http://127.0.0.1:8080/api/camera/status
+curl -s http://127.0.0.1:8080/api/camera/devices
 curl -s http://127.0.0.1:8080/api/camera/calibration
 curl -s http://127.0.0.1:8080/api/camera/detections
 curl http://127.0.0.1:8080/api/camera/color/snapshot.jpg -o /tmp/color.jpg
@@ -257,6 +321,15 @@ curl http://127.0.0.1:8080/api/camera/depth/raw.png -o /tmp/depth.png
 curl http://127.0.0.1:8080/api/camera/ir/raw.png -o /tmp/ir.png
 curl http://127.0.0.1:8080/api/camera/frame -o /tmp/bolt-frame.npz
 ```
+
+`GET /api/camera/devices` returns `cameras`, `active_id`, camera state, and
+any current error. Select a connected inventory ID using
+`POST /api/camera/select`, JSON `{"camera_id":"<id>"}`, and the header
+`X-RGB-Request: camera-select`. Requests with a different browser Origin are
+rejected. A successful response acknowledges the new owner and may still
+report `starting` until its first complete frame. Unknown/disconnected IDs
+return 404, physical ownership conflicts return 409, and an unfinished
+shutdown returns 503.
 
 `/{color,depth,ir}/stream` provides MJPEG, with eight concurrent viewers across
 channels. JPEG snapshots and stream parts identify their frame/session and

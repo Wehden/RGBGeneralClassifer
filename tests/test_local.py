@@ -75,6 +75,22 @@ def test_frame_bundle_raw_planes_calibration_and_headers(local):
     assert client.get('/api/camera/thermal/snapshot.jpg').status_code==404
 
 
+def test_live_overlay_uses_resized_preview_geometry_without_reducing_raw_pixels(local):
+    _,camera,frame,result,_,app=local
+    frame.metadata['color_preview']={'width':20,'height':15,'resized':True}
+    result['detections'][0]['box']=[.25,.25,.75,.75]
+    with app.test_request_context('/api/live/femto-bolt/stream'):
+        response=app.view_functions['stream']('femto-bolt')
+        iterator=iter(response.response)
+        part=next(iterator)
+        preview=cv2.imdecode(np.frombuffer(part.split(b'\r\n\r\n',1)[1].rsplit(b'\r\n',1)[0],np.uint8),cv2.IMREAD_COLOR)
+        assert preview.shape==(15,20,3)
+        assert frame.color_rgb.shape==(30,40,3)
+        # Overlay boxes use normalized coordinates at the displayed resolution.
+        assert preview[4,5,1]>preview[4,5,0]
+        iterator.close()
+        response.close()
+
 def test_volume_is_absent_for_rgb_cameras_and_available_as_status_for_depth_cameras(local):
     store,camera,frame,result,runtime,app=local
     camera.backend='v4l2'

@@ -184,6 +184,17 @@ def test_realsense_requires_unique_device_selection(sdk, devices):
     assert not state.starts
 
 
+def test_realsense_ui_selection_uses_asic_identity_instead_of_sdk_serial(sdk):
+    camera, state, rs, selected = sdk
+    camera.serial = None
+    camera.usb_serial = 'usb-asic-serial'
+    other = NS(supports=lambda key: True, get_info=lambda key: 'other-asic-serial')
+    rs.context().query_devices = lambda: [other, selected]
+    realsense.capture(camera)
+    assert state.selected == 'sdk-camera-serial' and camera.serial == 'sdk-camera-serial'
+    assert camera.get().metadata['device']['usb_serial'] == 'usb-asic-serial'
+
+
 def test_realsense_can_capture_rgb_depth_without_ir(sdk):
     camera, state, _, _ = sdk
     state.profiles.pop()

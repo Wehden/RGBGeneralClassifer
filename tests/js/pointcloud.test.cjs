@@ -42,3 +42,12 @@ test('leaving the 3D view discards late frames and stops polling',async()=>{
     assert.equal(viewer.frame,null);assert.equal(viewer.timer,undefined);assert.equal(messages.length,0);
   } finally {global.fetch=original;}
 });
+test('a physical camera change clears the previous 3D frame and resets its viewpoint',()=>{
+  let cleared;
+  const canvas={width:640,height:480,getContext:kind=>kind==='2d'?{clearRect(...args){cleared=args;}}:null,addEventListener(){}};
+  const viewer=new Viewer(canvas,()=>{});
+  viewer.frame=decode(frame());viewer.initialized=true;
+  viewer.stop(true);
+  assert.equal(viewer.frame,null);assert.equal(viewer.initialized,false);
+  assert.deepEqual(cleared,[0,0,640,480]);
+});

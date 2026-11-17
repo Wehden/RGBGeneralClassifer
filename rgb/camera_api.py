@@ -12,7 +12,7 @@ from uuid import UUID
 
 import cv2
 from flask import Response, jsonify, request, send_file
-from rgb.camera import CameraUnavailable, FrameExpired, jpg, png
+from rgb.camera import CameraBusy, CameraUnavailable, FrameExpired, jpg, png
 from rgb.local_store import ArchiveConflict, QueueFull
 from common.geometry import bounds
 from rgb.pointcloud import PointCloudBuilder
@@ -35,6 +35,8 @@ class CameraAPI:
         app.register_error_handler(sqlite3.Error,lambda exc:(jsonify(error='Archive storage unavailable'),503))
         app.register_error_handler(OSError,lambda exc:(jsonify(error='Archive storage unavailable'),503))
         app.add_url_rule('/api/camera/status','camera_status',self.status)
+        app.add_url_rule('/api/camera/devices','camera_devices',self.devices)
+        app.add_url_rule('/api/camera/select','camera_select',self.select,methods=['POST'])
         app.add_url_rule('/api/camera/calibration','camera_calibration',self.calibration)
         app.add_url_rule('/api/camera/<channel>/stream','camera_stream',self.stream_response)
         app.add_url_rule('/api/camera/<channel>/snapshot.jpg','camera_snapshot',self.snapshot)
@@ -77,6 +79,24 @@ class CameraAPI:
                        views=status['channels']+(['pointcloud'] if self.camera.backend in {'orbbec','realsense'} and 'depth' in status['channels'] else []),
                        configuration={**self.runtime.configuration,'archive_interval_s':settings['capture_interval_s']})
 
+    def devices(self):
+        from rgb.camera_devices import catalog
+        return jsonify(catalog(self.camera))
+
+    def select(self):
+        if not request.is_json or request.headers.get('X-RGB-Request')!='camera-select':
+            return jsonify(error='Expected camera selection request'),400
+        if request.headers.get('Origin') and urlsplit(request.headers['Origin']).netloc!=request.host:
+            return jsonify(error='Origin mismatch'),403
+        data=request.get_json(silent=True)
+        if (not isinstance(data,dict) or set(data)!={'camera_id'}
+                or not isinstance(data['camera_id'],str) or not 1<=len(data['camera_id'])<=128):
+            return jsonify(error='Expected camera_id from the connected camera list'),400
+        try:self.runtime.select_camera(data['camera_id'])
+        except ValueError as exc:return jsonify(error=str(exc)),404
+        except CameraBusy as exc:return jsonify(error=str(exc)),409
+        return self.devices()
+
     def calibration(self):
         frame,error=self._frame()
         if error:return error
@@ -85,7 +105,7 @@ class CameraAPI:
 
     def snapshot(self,channel):
         if channel not in {'color','depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2' and channel!='color':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'} and channel!='color':return 'Channel unsupported',404
         frame,error=self._frame()
         if error:return error
         if channel not in frame.previews:return jsonify(error='Channel unsupported by this backend'),404
@@ -94,7 +114,7 @@ class CameraAPI:
 
     def raw(self,channel):
         if channel not in {'depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'}:return 'Channel unsupported',404
         frame,error=self._frame()
         if error:return error
         array=getattr(frame,channel+'_native')
@@ -135,12 +155,14 @@ class CameraAPI:
 
     def stream_response(self,channel,overlay=False):
         if channel not in {'color','depth','ir'}:return 'Not found',404
-        if self.camera.backend=='v4l2' and channel!='color':return 'Channel unsupported',404
+        if self.camera.backend in {'v4l2','basler'} and channel!='color':return 'Channel unsupported',404
         frame=self.camera.get()
         if channel not in frame.previews:return 'Channel unsupported',404
         if not self.slots.acquire(blocking=False):return jsonify(error='Viewer limit reached'),429
         with self.lock:self.active+=1
         released=False
+        stop_event=self.camera.stop_event
+        session_id=frame.metadata['session_id']
         def release():
             nonlocal released
             with self.lock:
@@ -149,9 +171,10 @@ class CameraAPI:
         def generate():
             previous=None;sent=None
             try:
-                while not self.camera.stop_event.is_set():
+                while not stop_event.is_set():
                     try:f=self.camera.wait(previous,1)
                     except CameraUnavailable:return
+                    if f.metadata['session_id']!=session_id or channel not in f.previews:return
                     if previous==f.id:continue
                     previous=f.id
                     image=f.previews[channel]
@@ -162,7 +185,11 @@ class CameraAPI:
                                 and latest[0].color_rgb.shape==f.color_rgb.shape
                                 and time.monotonic()-latest[0].metadata['received_monotonic_s']<=self.camera.freshness_s):
                             f,result=latest
-                            color=cv2.cvtColor(f.color_rgb,cv2.COLOR_RGB2BGR)
+                            color=f.color_rgb
+                            preview=f.metadata.get('color_preview')
+                            if preview:
+                                color=cv2.resize(color,(preview['width'],preview['height']),interpolation=cv2.INTER_AREA)
+                            color=cv2.cvtColor(color,cv2.COLOR_RGB2BGR)
                             for d in result['detections']:
                                 x1,y1,x2,y2=bounds(d['box'],color.shape[1],color.shape[0])
                                 label=d.get('display_label',d.get('live_value',{}).get('display_label',d['label']))
@@ -196,7 +223,7 @@ class CameraAPI:
         return jsonify(observation_id=event['event_id'],event_id=event['event_id'],frame_id=event['frame_id']),201
 
     def pointcloud(self):
-        if self.camera.backend=='v4l2':return 'Registered depth unsupported',404
+        if self.camera.backend in {'v4l2','basler'}:return 'Registered depth unsupported',404
         try:
             stride=int(request.args.get('stride','6'))
             max_range=float(request.args.get('max_range_m','5'))

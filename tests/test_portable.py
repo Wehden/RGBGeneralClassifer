@@ -175,7 +175,7 @@ def test_live_uploader_survives_stale_then_fresh_camera_frame():
         # Exercise actual JSON encoding, then end the infinite uploader after recovery.
         json.dumps(kwargs['json']);sent.append(kwargs['json'])
         if len(sent)==2:raise Finished()
-    scope={'condition':Condition(),'state':state,'time':SimpleNamespace(time=lambda:100),'SOURCE':'unoq','policy':{'settings':{}},'transport':SimpleNamespace(request=request),'requests':requests,'base64':base64}
+    scope={'condition':Condition(),'state':state,'time':SimpleNamespace(time=lambda:100),'SOURCE':'unoq','policy':SimpleNamespace(snapshot=lambda:{'settings':{},'policy_fresh':True,'policy_max_age_s':15}),'transport':SimpleNamespace(request=request),'requests':requests,'base64':base64}
     exec(compile(ast.Module(body=[function],type_ignores=[]),'board/main.py','exec'),scope)
     with pytest.raises(Finished):scope['push_live']()
     assert sent[0]['image_b64'] is None

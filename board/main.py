@@ -19,6 +19,7 @@ from common.http import OPTIONS as HTTP_OPTIONS
 from board.detector import Detector, overlay
 from board.refinements import match
 from board.tracking import Tracker
+from board.policy import RemotePolicy
 from board.transport import Transport, observation_payload
 from board.streaming import response as stream_response
 from common.display import value
@@ -56,7 +57,7 @@ def identity(selected):
     return {'model':getattr(selected,'model',MODEL), 'model_sha256':getattr(selected,'sha256',MODEL_SHA),
             'detector_config':{**getattr(selected,'config',DETECTOR_CONFIG),'capture_limit_fps':MAX_FPS or None}}
 
-policy = {'settings': {'detector_threshold': .45, 'vlm_threshold': .65, 'display_mode': 'objects', 'classification_running': False, 'record_observations': False, 'version': 0}, 'refinements': None}
+policy = RemotePolicy(SOURCE)
 DB = os.getenv('OUTBOX_DB', '/data/outbox.sqlite3')
 transport = Transport(SOURCE)
 
@@ -95,7 +96,7 @@ def capture():
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError('Camera read failed')
-            current_policy = policy
+            current_policy = policy.snapshot()
             mode=current_policy['settings'].get('display_mode','objects')
             selected=detectors.get(mode,detectors['objects'])
             if mode!=last_mode:
@@ -106,6 +107,12 @@ def capture():
             running=current_policy['settings'].get('classification_running',True)
             recording=current_policy['settings'].get('record_observations',True)
             detections,ms=selected.detect(frame) if running else ([],None)
+            # A lease can expire or a source can be disabled during inference.
+            latest_policy = policy.snapshot()
+            running = running and latest_policy['settings']['classification_running']
+            recording = recording and latest_policy['settings']['record_observations']
+            if not running:
+                detections, ms = [], None
             provenance=identity(selected)
             for detection in detections:
                 detection['label_kind']='material' if selected is detectors.get('materials') else 'object'
@@ -129,15 +136,19 @@ def capture():
                 raise RuntimeError('JPEG encoding failed')
             now = time.time()
             with condition:
-                state.update(jpeg=jpeg.tobytes(), sequence=state['sequence']+1, last_frame=now, inference_ms=ms, detections=detections, error=None, **provenance, classification_running=running, record_observations=recording, applied_settings_version=current_policy['settings']['version'], proposal_max=max((p['confidence'] for p in getattr(selected,'proposals',[]) ),default=None) if running else None)
+                state.update(jpeg=jpeg.tobytes(), sequence=state['sequence']+1, last_frame=now, inference_ms=ms, detections=detections, error=None, **provenance, classification_running=running, record_observations=recording, applied_settings_version=current_policy['settings']['version'], policy_fresh=latest_policy['policy_fresh'], policy_max_age_s=latest_policy['policy_max_age_s'], proposal_max=max((p['confidence'] for p in getattr(selected,'proposals',[]) ),default=None) if running else None)
                 condition.notify_all()
             # Observation snapshots, not unique-item counts. Cap outbox at 500 rows.
-            if recording and running and now-last_event >= 15:
+            admission = policy.snapshot()['settings']
+            if recording and running and admission['classification_running'] and admission['record_observations'] and now-last_event >= 15:
                 raw_ok, raw = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if raw_ok:
                     event = {'event_id': str(uuid.uuid4()), 'observed_at': captured_at, 'source_id': SOURCE, 'location': LOCATION or None, 'location_kind': 'configured' if LOCATION else 'unknown', 'detector': {'model': provenance['model'], 'sha256': provenance['model_sha256'], 'config': provenance['detector_config'], 'threshold': selected.threshold, 'settings_version': current_policy['settings']['version']}, 'detections': detections, 'detector_proposals':getattr(selected,'proposals',[]), 'image_b64': base64.b64encode(raw).decode()}
                     with database() as conn:
                         size = conn.execute('SELECT COUNT(*) FROM outbox').fetchone()[0]
+                        final_policy = policy.snapshot()['settings']
+                        if not final_policy['classification_running'] or not final_policy['record_observations']:
+                            continue
                         if size < 500:
                             conn.execute('INSERT INTO outbox VALUES (?, ?)', (event['event_id'], json.dumps(event)))
                         else:
@@ -154,14 +165,9 @@ def capture():
 
 
 def poll_policy():
-    global policy
     while True:
         try:
-            received = transport.request('GET', '/policy')
-            for key in ['detector_threshold','vlm_threshold']:
-                if not .05 <= float(received['settings'][key]) <= .99:
-                    raise ValueError('Invalid threshold')
-            policy = received
+            policy.refresh(transport)
         except (requests.RequestException,KeyError,TypeError,ValueError):
             pass
         time.sleep(3)
@@ -197,7 +203,8 @@ def push_live():
         age = max(0, time.time()-current['last_frame'])
         jpeg = current.pop('jpeg', None)
         if age >= 15:jpeg = None
-        current.update(source_id=SOURCE, settings=policy['settings'])
+        effective = policy.snapshot()
+        current.update(source_id=SOURCE, settings=effective['settings'], policy_fresh=effective['policy_fresh'], policy_max_age_s=effective['policy_max_age_s'])
         try:
             transport.request('POST', '/live', json={'status':current,
                 'image_b64':base64.b64encode(jpeg).decode() if jpeg else None,
@@ -210,7 +217,8 @@ def push_live():
 def health():
     with condition:
         result = {k:v for k,v in state.items() if k != 'jpeg'}
-    result.update(source_id=SOURCE, settings=policy['settings'])
+    effective = policy.snapshot()
+    result.update(source_id=SOURCE, settings=effective['settings'], policy_fresh=effective['policy_fresh'], policy_max_age_s=effective['policy_max_age_s'])
     return jsonify(result), 200 if time.time()-result['last_frame'] < 15 else 503
 
 

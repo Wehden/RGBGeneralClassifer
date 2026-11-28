@@ -11,6 +11,10 @@ from common.display import value
 DEFAULT_SETTINGS={'detector_threshold':.45,'vlm_threshold':.65,'display_mode':'objects','vlm_paused':False,'classification_running':True,'record_observations':True,'version':0}
 
 APPEND = """
+local settings = cjson.decode(redis.call('GET', KEYS[5]) or '{}')
+if settings.active_source and settings.active_source ~= cjson.null and settings.active_source ~= ARGV[4] then
+ return {false, -1}
+end
 local existing = redis.call('HGET', KEYS[1], ARGV[1])
 if existing then return {existing, 0} end
 local id = redis.call('XADD', KEYS[2], '*', 'event', ARGV[2])
@@ -170,7 +174,20 @@ class Store:
         settings=self.settings_at(event['observed_at'])
         return {'automatic':not settings['vlm_paused'],'vlm_paused':settings['vlm_paused'],'settings_version':settings['version']}
 
+    def source_enabled(self, source_id):
+        active = self.settings().get('active_source')
+        return active is None or active == source_id
+
+    def source_settings(self, source_id):
+        settings = self.settings()
+        active = settings.get('active_source')
+        if active is not None and active != source_id:
+            settings.update(classification_running=False, record_observations=False)
+        return settings
+
     def save(self,event,image):
+        if not self.source_enabled(event['source_id']):
+            raise InactiveSource(event['source_id'])
         capture_settings=self.settings_at(event['observed_at'])
         if not capture_settings['classification_running'] or not capture_settings['record_observations']:
             return None,False
@@ -187,7 +204,9 @@ class Store:
                 tmp.unlink(missing_ok=True)
         event['image_sha256']=digest
         state={'status':('queued' if event['analysis_policy']['automatic'] else 'manual_only') if self.analysis_enabled else 'disabled','schema_version':3,'capture_policy':event['analysis_policy']}
-        row_id,created=self.redis.eval(APPEND,4,'rgb:ids','rgb:events','rgb:analysis','rgb:latest',event['event_id'],json.dumps(event),json.dumps(state),event['source_id'],datetime.fromisoformat(event['observed_at']).timestamp())
+        row_id,created=self.redis.eval(APPEND,5,'rgb:ids','rgb:events','rgb:analysis','rgb:latest','rgb:settings',event['event_id'],json.dumps(event),json.dumps(state),event['source_id'],datetime.fromisoformat(event['observed_at']).timestamp())
+        if created == -1:
+            raise InactiveSource(event['source_id'])
         # Initial scene is durable first; deterministic IDs let a retry repair any
         # interrupted per-detection initialization without duplicating stream entries.
         original=self.raw(event['event_id'])
@@ -358,3 +377,7 @@ class Store:
                 pipe.xadd('rgb:detection:'+key+':events',{'kind':'processing_failure','value':encoded})
                 pipe.xadd('rgb:detection-updates',{'detection_id':key,'kind':'processing_failure','value':encoded})
             pipe.execute()
+
+
+class InactiveSource(ValueError):
+    """The current source selection does not admit this observation."""

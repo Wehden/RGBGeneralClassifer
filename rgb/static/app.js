@@ -66,6 +66,38 @@ async function cameraDevices(force=false) {
     }
   }
 }
+// Selection is shared server policy, not just a viewer preference.
+async function selectSource() {
+  const sourceId=$('source').value;
+  if(!sourceId)return;
+  $('source').disabled=true;
+  statusRequest++;
+  desiredClassification=null;
+  unavailableClassifier('Waiting for selected camera');
+  clearInterval(timer);
+  liveVideo.stop();pointcloudViewer?.stop(true);
+  try {
+    const response=await fetch('/api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},
+      body:JSON.stringify({active_source:sourceId})});
+    if(!response.ok)throw new Error(`Source selection failed (${response.status})`);
+    settings=await response.json();
+    $('source').value=settings.active_source;
+    if($('classification-toggle'))renderClassification(settings);
+    live();
+  } catch(error) {
+    // A lost response may still have persisted: reconcile before showing a source.
+    try {settings=await get('/api/settings');} catch {settings={...settings,active_source:''};}
+    $('source').value=settings.active_source||'';
+    if(sources.some(s=>s.id===settings.active_source)){
+      if($('classification-toggle'))renderClassification(settings);
+      live();
+    } else {
+      unavailableClassifier('Camera selection unavailable');
+    }
+    $('live-state').textContent=error.message;
+  } finally { $('source').disabled=false; }
+}
 async function selectCamera() {
   const cameraId=$('camera-select').value;
   if(cameraChanging||cameraId===cameraInventory?.active_id)return;
@@ -108,13 +140,43 @@ function renderCamera(camera) {
   if($('raw-link')&&!$('raw-link').hidden)$('raw-link').textContent=rawLabel(select.value==='pointcloud'?'depth':select.value);
   syncViewIcons();
 }
+function unavailableClassifier(message='Classifier unavailable for this camera') {
+  $('timing').textContent=message;
+  $('detector-model').textContent='Detection: unavailable';
+  activity('detection','unknown','Unknown');
+  if($('classification-toggle')){
+    activity('capture','unknown','Unknown');
+    $('classification-state').textContent=message;
+  }
+}
+let statusRequest=0;
 async function status() {
   const generation=cameraGeneration;
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; renderDetection(s); acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
-  catch { $('timing').textContent = 'Camera status unavailable'; activity('detection','unknown','Unknown'); if($('classification-toggle'))activity('capture','unknown','Unknown'); }
+  const sourceId=$('source').value;
+  if(!sourceId)return;
+  const request=++statusRequest;
+  try {
+    const s=await get(`/api/live/${encodeURIComponent(sourceId)}/status`);
+    if(request!==statusRequest||sourceId!==$('source').value||generation!==cameraGeneration||cameraChanging)return;
+    if(s.backend==='unavailable'||s.policy_fresh===false){
+      unavailableClassifier(s.policy_fresh===false?'Remote policy expired · classification disabled':'Classifier unavailable for this camera');
+      return;
+    }
+    $('detector-model').textContent='Detection: model not reported';
+    $('timing').textContent=s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`;
+    renderDetection(s);
+    acknowledgeClassification(s);
+    if(s.model){
+      const placement=s.classifier_placement||(s.backend==='cluster'?'Cluster':s.backend?'Local':'Uno Q');
+      $('detector-model').textContent=`Detection: ${s.model} · ${placement} ${s.detector_config?.runtime ?? 'CPU'}`;
+    }
+  } catch {
+    if(request!==statusRequest||sourceId!==$('source').value||generation!==cameraGeneration||cameraChanging)return;
+    unavailableClassifier('Classifier status unavailable for this camera');
+  }
   if(sources.find(s=>s.id===$('source').value)?.local&&!cameraChanging){
-    try{const camera=await get('/api/camera/status');if(generation===cameraGeneration&&!cameraChanging)renderCamera(camera);}catch{}
-    if($('camera-select'))await cameraDevices();
+    try{const camera=await get('/api/camera/status');if(request===statusRequest&&sourceId===$('source').value&&generation===cameraGeneration&&!cameraChanging)renderCamera(camera);}catch{}
+    if(request===statusRequest&&sourceId===$('source').value&&generation===cameraGeneration&&!cameraChanging&&$('camera-select'))await cameraDevices();
   }
 }
 function live() {
@@ -223,9 +285,9 @@ $('detector-threshold').oninput=syncThresholds; $('vlm-threshold').oninput=syncT
 $('save-settings').onclick=async () => { try { const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({detector_threshold:Number($('detector-threshold').value),vlm_threshold:Number($('vlm-threshold').value)})}); if (!r.ok) throw new Error(`Save failed (${r.status})`); settings=await r.json(); $('settings-status').textContent=`Saved revision ${settings.version}`; load(); if (selected) show(selected,true); } catch (e) { $('settings-status').textContent=e.message; } };
 window.addEventListener('hashchange',()=>{ const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match && match[1]!==selected) show(match[1]); });
 $('mode').onchange=async () => { const mode=$('mode').value; $('mode').disabled=true; try { const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json','X-RGB-Request':'settings'},body:JSON.stringify({display_mode:mode})}); if (!r.ok) throw new Error(`Save failed (${r.status})`); settings=await r.json(); $('mode-status').textContent=`Saved revision ${settings.version}`; load(); if (selected) show(selected,true); } catch (e) { $('mode-status').textContent=e.message; $('mode').value=settings.display_mode; } $('mode').disabled=false; };
-$('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('source').onchange = live;
+$('refresh').onclick = () => load(); $('older').onclick = () => load(true); $('source').onchange = selectSource;
 if($('camera-select'))$('camera-select').onchange=selectCamera;
-(async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
+(async () => { try { settings=await get('/api/settings'); $('mode').value=settings.display_mode; $('detector-threshold').value=settings.detector_threshold; $('vlm-threshold').value=settings.vlm_threshold; syncThresholds(); sources=await get('/api/sources'); for (const s of sources) { const o=element('option',s.label); o.value=s.id; $('source').append(o); } if(settings.active_source){$('source').value=settings.active_source;} else if(!sources.some(s=>s.local)){const option=element('option','Select active camera…');option.value='';$('source').append(option);$('source').value='';} live(); } catch { $('live-state').textContent='Sources unavailable'; } load(); const match=location.hash.match(/^#event\/([a-f0-9-]{36})$/i); if (match) show(match[1]); })();
 
 let vlmPaused=false,vlmChanging=false,vlmGeneration=0,modelDirty=false;
 let providerCatalog=[],modelChanging=false;
@@ -374,10 +436,18 @@ function renderClassification(s){
   $('classification-toggle').textContent=classificationRunning?'Pause classification':'Start classification';
   $('classification-toggle').disabled=false;
   activity('detection','waiting','Pending');activity('capture','waiting','Pending');
-  $('classification-state').textContent='Control saved · awaiting Uno Q';
+  $('classification-state').textContent='Waiting for classifier confirmation';
+  void status();
 }
 function acknowledgeClassification(s){
-  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
+  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording){
+    if(desiredClassification){
+      activity('detection','waiting','Pending');
+      activity('capture','waiting','Pending');
+      $('classification-state').textContent='Waiting for classifier confirmation';
+    }
+    return;
+  }
   activity('capture',s.classification_running&&s.record_observations?'on':'off',s.classification_running&&s.record_observations?'Recording':'Off');
   $('classification-state').textContent=s.classification_running?(s.record_observations?'Running · recording observations':'Running · preview only'):'Paused · camera on';
 }

@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from redis.exceptions import RedisError
 from rgb.events import InvalidEvent, validate_event
-from rgb.store import StaleEvaluation
+from rgb.store import StaleEvaluation, InactiveSource
 from rgb import live
 
 
@@ -122,7 +122,10 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             if loc:event.update(location=loc['label'] or None,location_kind=loc['method'],location_record=loc)
         except InvalidEvent:
             return jsonify(error='Invalid observation'), 400
-        row_id, created = store.save(event, image)
+        try:
+            row_id, created = store.save(event, image)
+        except InactiveSource:
+            return jsonify(error='Source is inactive', source_id=event['source_id']), 409
         return jsonify(event_id=event['event_id'], cursor=row_id, created=created, recorded=row_id is not None), 201 if created else 200
 
     @app.get('/api/settings')
@@ -137,12 +140,14 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
             return jsonify(error='Origin mismatch'), 403
         data=request.get_json(silent=True)
         allowed=[{'detector_threshold','vlm_threshold'},{'display_mode'},{'detector_threshold','vlm_threshold','display_mode'},{'vlm_paused'}]
-        if not local_runtime:allowed.append({'classification_running','record_observations'})
+        if not local_runtime:allowed.extend([{'classification_running','record_observations'}, {'active_source'}])
         if local_runtime:allowed.extend([{'selected_model','model_selection_reason'},
                                         {'selected_provider','selected_model','model_selection_reason'},{'capture_paused'},
                                         {'capture_interval_s'},{'capture_paused','capture_interval_s'}])
         if not isinstance(data,dict) or set(data) not in allowed:
             return jsonify(error='Expected confidence thresholds, display mode or vlm_paused'),400
+        if 'active_source' in data and (not isinstance(data['active_source'], str) or data['active_source'] not in sources):
+            return jsonify(error='Expected configured active source'),400
         if 'display_mode' in data and data['display_mode'] not in ['objects','materials']:
             return jsonify(error='Expected objects or materials mode'),400
         if 'vlm_paused' in data and type(data['vlm_paused']) is not bool:
@@ -181,7 +186,7 @@ def create_app(store, sources=None, ingest_token=None, analysis_models=None, loc
         return policy_for(source_id)
 
     def policy_for(source_id):
-        return jsonify(settings=store.settings(),refinements=store.refinements(source_id))
+        return jsonify(settings=store.source_settings(source_id),refinements=store.refinements(source_id))
 
     @app.post('/api/events/<event_id>/analyze')
     def reanalyze(event_id):

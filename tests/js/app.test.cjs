@@ -356,7 +356,7 @@ test('local classification preview sends no-recording policy independently of VL
   await context.setClassification(true);
   assert.equal(request.url,'/api/settings');
   assert.deepEqual(request.body,{classification_running:true,record_observations:false});
-  assert.equal(node('classification-state').textContent,'Control saved · awaiting Uno Q');
+  assert.equal(node('classification-state').textContent,'Waiting for classifier confirmation');
   context.acknowledgeClassification({classification_running:true,record_observations:false,applied_settings_version:0});
   assert.equal(node('classification-state').textContent,'Running · preview only');
   assert.equal(request.body.vlm_paused,undefined);
@@ -496,4 +496,141 @@ test('provider Apply feedback survives polling and edits require another Apply',
   assert.equal(node('provider-status').textContent,'Applied · OpenRouter · Nova 2 Lite');
   context.renderVlm({...providerState(),selected_provider:'openrouter',selected_model:'amazon/nova-2-lite-v1'});
   assert.equal(node('provider-status').textContent,'Applied · OpenRouter · Nova 2 Lite');
+});
+
+test('source selection persists policy before starting viewer',async()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'portentauno'},{id:'zcam'}];settings={active_source:'portentauno'}",context);
+  node('source').value='zcam';
+  let posted,resolveSave;
+  context.fetch=async(url,options)=>{
+    if(options){posted={url,...options};return new Promise(resolve=>{resolveSave=resolve;});}
+    return new Promise(()=>{});
+  };
+  const pending=context.selectSource();
+  assert.equal(node('source').disabled,true);
+  assert.equal(vm.runInContext('liveVideo.url',context),null);
+  assert.deepEqual(JSON.parse(posted.body),{active_source:'zcam'});
+  assert.equal(posted.url,'/api/settings');
+  assert.equal(posted.headers['X-RGB-Request'],'settings');
+  resolveSave(json({active_source:'zcam',version:3}));
+  await pending;
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/live/zcam/stream');
+  assert.equal(node('source').disabled,false);
+});
+
+test('failed source selection reconciles server policy without claiming success',async()=>{
+  const {context,node}=setup();
+  node('source').value='zcam';
+  context.fetch=async(url,options)=>options?{ok:false,status:503}:json({active_source:'portentauno'});
+  await context.selectSource();
+  assert.equal(node('source').value,'portentauno');
+  assert.match(node('live-state').textContent,/failed.*503/);
+  assert.equal(vm.runInContext('liveVideo.url',context),null);
+});
+
+for(const [description,metadata,expected] of [
+  ['explicit placement',{classifier_placement:'Cluster GPU',backend:'cluster'},'Cluster GPU'],
+  ['cluster fallback',{backend:'cluster'},'Cluster'],
+  ['local fallback',{backend:'qnn'},'Local'],
+  ['board fallback',{},'Uno Q'],
+])test(`classifier status uses ${description}`,async()=>{
+  const {context,node}=setup();node('source').value='zcam';
+  context.fetch=async()=>json({model:'detector',detector_config:{runtime:'QNN'},...metadata});
+  await context.status();
+  assert.equal(node('detector-model').textContent,`Detection: detector · ${expected} QNN`);
+});
+
+for(const fails of [false,true])test(`late previous-source ${fails?'error':'success'} cannot overwrite selected camera status`,async()=>{
+  const {context,node}=setup();node('source').value='portentauno';
+  let resolveOld,rejectOld;
+  context.fetch=async url=>url.includes('portentauno')?new Promise((resolve,reject)=>{resolveOld=resolve;rejectOld=reject;}):json({model:'Z CAM detector',backend:'cluster',inference_ms:12});
+  const old=context.status();
+  node('source').value='zcam';await context.status();
+  const before=[node('timing').textContent,node('detector-model').textContent,node('classification-state').textContent];
+  if(fails)rejectOld(new Error('offline'));else resolveOld(json({model:'Uno detector',inference_ms:999}));
+  await old;
+  assert.deepEqual([node('timing').textContent,node('detector-model').textContent,node('classification-state').textContent],before);
+});
+
+test('overlapping status requests for the same source keep the latest result',async()=>{
+  const {context,node}=setup();node('source').value='zcam';
+  let resolveOld,calls=0;
+  context.fetch=async()=>++calls===1?new Promise(resolve=>{resolveOld=resolve;}):json({inference_ms:15});
+  const old=context.status();await context.status();
+  resolveOld(json({inference_ms:999}));await old;
+  assert.equal(node('timing').textContent,'15 ms inference');
+});
+
+test('classification save requests selected camera confirmation and waits for matching revision and flags',async()=>{
+  const {context,node}=setup();node('source').value='zcam';
+  const requested=[];
+  context.fetch=async url=>{requested.push(url);return json({applied_settings_version:4,classification_running:true,record_observations:true});};
+  context.renderClassification({version:5,classification_running:true,record_observations:true});
+  await context.status();
+  assert.ok(requested.every(url=>url==='/api/live/zcam/status'));
+  assert.equal(node('classification-state').textContent,'Waiting for classifier confirmation');
+  assert.equal(node('detection-indicator').dataset.state,'waiting');
+  context.fetch=async()=>json({applied_settings_version:5,classification_running:true,record_observations:false});
+  await context.status();
+  assert.equal(node('capture-indicator').dataset.state,'waiting');
+  context.fetch=async()=>json({applied_settings_version:5,classification_running:true,record_observations:true});
+  await context.status();
+  assert.equal(node('classification-state').textContent,'Running · recording observations');
+  assert.equal(node('capture-indicator').textContent,'Recording');
+  context.fetch=async()=>{throw new Error('offline');};await context.status();
+  assert.equal(node('classification-state').textContent,'Classifier status unavailable for this camera');
+  assert.equal(node('capture-indicator').dataset.state,'unknown');
+});
+
+test('status ignores responses from a previous local camera generation',async()=>{
+  const {context,node}=setup();node('source').value='local';
+  let resolveStatus;
+  context.fetch=async()=>new Promise(resolve=>{resolveStatus=resolve;});
+  const old=context.status();vm.runInContext('cameraGeneration++',context);
+  resolveStatus(json({model:'old camera',inference_ms:999}));await old;
+  assert.equal(node('detector-model').textContent,'');
+});
+
+test('lost selection response reconciles Z CAM, clears Uno Q acknowledgement and resumes polling',async()=>{
+  const {context,node}=setup();
+  vm.runInContext("sources=[{id:'portentauno'},{id:'zcam'}];settings={active_source:'portentauno'}",context);
+  node('source').value='portentauno';
+  context.renderClassification({version:1,classification_running:true,record_observations:true});
+  context.acknowledgeClassification({applied_settings_version:1,classification_running:true,record_observations:true});
+  node('detector-model').textContent='Detection: Uno Q old model';
+  node('source').value='zcam';
+  let polls=0;
+  context.setInterval=()=>{polls++;return 99;};
+  context.fetch=async(url,options)=>{
+    if(options)throw new Error('Lost response');
+    if(url==='/api/settings')return json({active_source:'zcam',version:2,classification_running:true,record_observations:false});
+    return new Promise(()=>{});
+  };
+  await context.selectSource();
+  assert.equal(node('source').value,'zcam');
+  assert.equal(node('detector-model').textContent,'Detection: unavailable');
+  assert.equal(node('classification-state').textContent,'Waiting for classifier confirmation');
+  assert.equal(node('capture-indicator').dataset.state,'waiting');
+  assert.equal(node('classification-mode').value,'preview');
+  assert.equal(vm.runInContext('liveVideo.url',context),'/api/live/zcam/stream');
+  assert.equal(polls,1);
+});
+
+for(const kind of ['backend','network','lease'])test(`successful status followed by ${kind} failure clears model and recording claim`,async()=>{
+  const {context,node}=setup();node('source').value='zcam';
+  context.fetch=async()=>json({model:'Working detector',backend:'cluster',classification_running:true,record_observations:true,applied_settings_version:1});
+  context.renderClassification({version:1,classification_running:true,record_observations:true});
+  await context.status();
+  assert.match(node('detector-model').textContent,/Working detector/);
+  assert.equal(node('classification-state').textContent,'Running · recording observations');
+  context.fetch=async()=>{
+    if(kind==='network')throw new Error('offline');
+    return json({classification_running:false,record_observations:false,...(kind==='backend'?{backend:'unavailable'}:{policy_fresh:false})});
+  };
+  await context.status();
+  assert.equal(node('detector-model').textContent,'Detection: unavailable');
+  assert.match(node('classification-state').textContent,/unavailable|expired/);
+  assert.doesNotMatch(node('timing').textContent,/paused/);
+  assert.equal(node('capture-indicator').dataset.state,'unknown');
 });

@@ -108,10 +108,31 @@ function renderCamera(camera) {
   if($('raw-link')&&!$('raw-link').hidden)$('raw-link').textContent=rawLabel(select.value==='pointcloud'?'depth':select.value);
   syncViewIcons();
 }
+let statusRequest=0;
 async function status() {
   const generation=cameraGeneration;
-  try { const s = await get(`/api/live/${encodeURIComponent($('source').value)}/status`); $('timing').textContent = s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`; renderDetection(s); acknowledgeClassification(s); if(s.model)$('detector-model').textContent=`Detection: ${s.model} · ${s.backend ? 'Local' : 'Uno Q'} ${s.detector_config?.runtime ?? 'CPU'}`; }
-  catch { $('timing').textContent = 'Camera status unavailable'; activity('detection','unknown','Unknown'); if($('classification-toggle'))activity('capture','unknown','Unknown'); }
+  const sourceId=$('source').value;
+  if(!sourceId)return;
+  const request=++statusRequest;
+  try {
+    const s=await get(`/api/live/${encodeURIComponent(sourceId)}/status`);
+    if(request!==statusRequest||sourceId!==$('source').value)return;
+    $('timing').textContent=s.classification_running===false?'Classification paused':`${s.inference_ms ?? '?'} ms inference${Array.isArray(s.detections)&&s.detections.length===0&&s.proposal_max!=null?' · highest proposal '+(s.proposal_max*100).toFixed(1)+'%':''}`;
+    renderDetection(s);
+    acknowledgeClassification(s);
+    if(s.model){
+      const placement=s.classifier_placement||(s.backend==='cluster'?'Cluster':s.backend?'Local':'Uno Q');
+      $('detector-model').textContent=`Detection: ${s.model} · ${placement} ${s.detector_config?.runtime ?? 'CPU'}`;
+    }
+  } catch {
+    if(request!==statusRequest||sourceId!==$('source').value)return;
+    $('timing').textContent='Camera status unavailable';
+    activity('detection','unknown','Unknown');
+    if($('classification-toggle')){
+      activity('capture','unknown','Unknown');
+      $('classification-state').textContent='Classifier status unavailable for this camera';
+    }
+  }
   if(sources.find(s=>s.id===$('source').value)?.local&&!cameraChanging){
     try{const camera=await get('/api/camera/status');if(generation===cameraGeneration&&!cameraChanging)renderCamera(camera);}catch{}
     if($('camera-select'))await cameraDevices();
@@ -374,10 +395,18 @@ function renderClassification(s){
   $('classification-toggle').textContent=classificationRunning?'Pause classification':'Start classification';
   $('classification-toggle').disabled=false;
   activity('detection','waiting','Pending');activity('capture','waiting','Pending');
-  $('classification-state').textContent='Control saved · awaiting Uno Q';
+  $('classification-state').textContent='Waiting for classifier confirmation';
+  void status();
 }
 function acknowledgeClassification(s){
-  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording)return;
+  if(!desiredClassification||typeof s.applied_settings_version!=='number'||s.applied_settings_version<desiredClassification.version||s.classification_running!==desiredClassification.running||s.record_observations!==desiredClassification.recording){
+    if(desiredClassification){
+      activity('detection','waiting','Pending');
+      activity('capture','waiting','Pending');
+      $('classification-state').textContent='Waiting for classifier confirmation';
+    }
+    return;
+  }
   activity('capture',s.classification_running&&s.record_observations?'on':'off',s.classification_running&&s.record_observations?'Recording':'Off');
   $('classification-state').textContent=s.classification_running?(s.record_observations?'Running · recording observations':'Running · preview only'):'Paused · camera on';
 }
